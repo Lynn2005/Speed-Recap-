@@ -18,6 +18,11 @@ const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_MB || 900) * 1024 * 1024;
 const uploads = new Map();
 const jobs = new Map();
 const voiceOutputs = new Map();
+const UPLOAD_INDEX = path.join(DATA_DIR, 'uploads.json');
+try {
+  const saved = JSON.parse(fs.readFileSync(UPLOAD_INDEX, 'utf8'));
+  for (const item of saved) if (item && item.id && item.path && fs.existsSync(item.path)) uploads.set(item.id, item);
+} catch {}
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -90,6 +95,7 @@ app.post('/api/upload', (req, res) => {
         createdAt: new Date().toISOString()
       };
       uploads.set(id, item);
+      fs.writeFileSync(UPLOAD_INDEX, JSON.stringify([...uploads.values()]));
       res.json({ file: { id, name: item.originalName, size: item.size, duration: item.duration, width: item.width, height: item.height } });
     } catch (e) {
       fs.unlink(req.file.path, () => {});
@@ -147,7 +153,8 @@ app.post('/api/voice', async (req, res) => {
 app.post('/api/export', async (req, res) => {
   const file = uploads.get(String(req.body.fileId || ''));
   if (!file || !fs.existsSync(file.path)) return res.status(404).json({ error: 'Uploaded video not found. Please upload again after server restart.' });
-  const voicePath = voiceOutputs.get(String(req.body.voiceId || ''));
+  const voiceId = String(req.body.voiceId || '');
+  const voicePath = voiceOutputs.get(voiceId) || (/^[a-f0-9-]{36}$/i.test(voiceId) ? path.join(OUTPUT_DIR, voiceId + '.wav') : null);
   const id = randomUUID();
   const outputPath = path.join(OUTPUT_DIR, id + '.mp4');
   const job = { id, state: 'processing', progress: 5, message: 'Preparing FFmpeg export', createdAt: new Date().toISOString() };
@@ -224,6 +231,12 @@ app.post('/api/export', async (req, res) => {
   })();
 });
 
+app.get('/api/source/:id', (req, res) => {
+  const file = uploads.get(String(req.params.id || ''));
+  if (!file || !fs.existsSync(file.path)) return res.status(404).json({ error: 'Source video not found.' });
+  res.type(path.extname(file.path));
+  res.sendFile(file.path);
+});
 app.get('/api/jobs/:id', (req, res) => {
   const job = jobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'Job not found' });
