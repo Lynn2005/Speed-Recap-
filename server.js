@@ -172,14 +172,14 @@ app.post('/api/export', async (req, res) => {
         h: Math.max(25, Math.round(clamp(o?.h, 0.02, 1) * dimensions.h))
       });
       const blur = overlays.blur && overlays.blur.visible ? coords(overlays.blur) : null;
-      const esc = value => String(value || '').replace(/\\\\/g, '\\\\\\\\').replace(/:/g, '\\\\:').replace(/'/g, "\\\\'").replace(/,/g, '\\\\,').replace(/;/g, '\\\\;').replace(/\\[/g, '\\\\[').replace(/\\]/g, '\\\\]').replace(/%/g, '\\\\%').replace(/\\n/g, ' ');
+      const esc = value => String(value || '').replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "\\'").replace(/,/g, '\\,').replace(/;/g, '\\;').replace(/\[/g, '\\[').replace(/\]/g, '\\]').replace(/%/g, '\\%').replace(/\n/g, ' ');
       const drawtext = (kind, o) => {
         if (!o || !o.visible || !String(o.text || '').trim()) return null;
         const c = coords(o);
         const fs = Math.round(clamp(o.fontSize, 12, 100) * dimensions.w / 360);
         const color = kind === 'logo' ? '0x75f0c5' : 'white';
         const box = kind === 'subtitle' || kind === 'text' ? ':box=1:boxcolor=black@0.55:boxborderw=8' : ':box=1:boxcolor=0x10182a@0.8:boxborderw=5';
-        return 'drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf:text=\\'' + esc(o.text).slice(0, 250) + '\\':x=' + c.x + ':y=' + c.y + ':fontsize=' + fs + ':fontcolor=' + color + box;
+        return "drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf:text='" + esc(o.text).slice(0, 250) + "':x=" + c.x + ':y=' + c.y + ':fontsize=' + fs + ':fontcolor=' + color + box;
       };
       let graph = '';
       let current = 'v0';
@@ -210,7 +210,7 @@ app.post('/api/export', async (req, res) => {
       let stderr = '';
       child.stdout.on('data', chunk => {
         const txt = chunk.toString();
-        const m = txt.match(/out_time_ms=(\\d+)/);
+        const m = txt.match(/out_time_ms=(\d+)/);
         if (m && file.duration > 0) job.progress = Math.max(15, Math.min(95, 15 + Math.round(Number(m[1]) / 1000000 / file.duration * 80)));
       });
       child.stderr.on('data', d => { stderr += d.toString(); if (stderr.length > 12000) stderr = stderr.slice(-12000); });
