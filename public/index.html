@@ -87,6 +87,13 @@
       <div class="export-summary" id="exportSummary"><span class="summary-icon">▶</span><div><b>Ready to export</b><p>Aspect ratio, mirror, blur and subtitle settings ကို သုံးပါမယ်။</p></div></div>
       <div id="exportProgressWrap" class="progress-wrap hidden"><div class="progress-label"><span id="exportLabel">Preparing…</span><b id="exportPct">0%</b></div><div class="progress"><i id="exportProgress"></i></div></div>
       <div id="exportResult" class="hidden result-card"></div>
+      <div class="control-card thumbnail-card">
+        <b>Thumbnail Creator</b><p>Video frame ကို thumbnail အဖြစ်ထုတ်ပြီး မြန်မာ/English title ထည့်ပါ။</p>
+        <label class="field-label" for="thumbnailTitle">Thumbnail title<input id="thumbnailTitle" maxlength="80" value="MOVIE RECAP"></label>
+        <button id="makeThumbnail" class="secondary full">▧ Generate Thumbnail</button>
+        <img id="thumbnailPreview" class="thumbnail-preview hidden" alt="Generated video thumbnail">
+        <a id="thumbnailDownload" class="hidden" download="speed-recap-thumbnail.jpg">Download thumbnail ↗</a>
+      </div>
       <div class="actions"><button class="ghost-btn back" data-back="3">← Back to edit</button><button id="startExport" class="primary">⚡ Export MP4</button></div>
     </section>
     <div id="toast" class="toast hidden" role="status"></div>
