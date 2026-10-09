@@ -72,7 +72,7 @@ $('autoTranscribe').addEventListener('click', async () => {
         else if(job.state==='failed') { clearInterval(timer); b.disabled=false; b.textContent='♫ Retry Auto Transcribe'; $('transcribeStatus').textContent=job.message||'Transcription failed'; toast(job.message||'Transcription failed',true); }
       } catch(e) { clearInterval(timer); b.disabled=false; b.textContent='♫ Retry Auto Transcribe'; toast(e.message,true); }
     };
-    await poll(); var timer=setInterval(poll,2500);
+    var timer=setInterval(poll,2500); await poll();
   } catch(e) { b.disabled=false; b.textContent='♫ Retry Auto Transcribe'; $('transcribeStatus').textContent=e.message; toast(e.message,true); }
 });
 $('generateScript').addEventListener('click', async () => { const transcript=$('transcript').value.trim(); if(!state.apiKey) $('apiPanel').classList.remove('hidden'); if(!transcript) return toast('Transcript / story notes ထည့်ပါ။',true); const b=$('generateScript'); b.disabled=true; b.textContent='Generating…'; try { const d=await api('/api/recap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript,language:$('language').value})}); $('script').value=d.script; toast('Recap script ထုတ်ပြီးပါပြီ။'); } catch(e){toast(e.message,true);} finally {b.disabled=false;b.textContent='✦ Gemini နဲ့ Script ထုတ်မယ်';} });
