@@ -43,7 +43,9 @@
 
     <section class="page" data-panel="2">
       <div class="section-head"><div><span class="kicker">STEP 02</span><h2>Transcript & recap</h2><p>Transcript ကိုထည့်ပြီး မြန်မာ narration script ထုတ်ပါ။</p></div><span class="counter">02 / 04</span></div>
-      <div class="notice">ဒီ build မှာ arbitrary movie ကနေ automatic timestamped ASR မပါသေးပါ။ ရှိပြီးသား transcript ကို paste လုပ်ပါ၊ သို့မဟုတ် script ကို ကိုယ်တိုင်ထည့်ပါ။</div>
+      <div class="notice">Gemini က video audio ကို ၂ မိနစ်စီခွဲပြီး transcript နဲ့ အနီးစပ်ဆုံး timestamp ထုတ်ပေးပါမယ်။ အချိန်နဲ့တိကျမှုက audio အရည်အသွေးနဲ့ Gemini response ပေါ်မူတည်ပါတယ်။</div>
+      <button id="autoTranscribe" class="secondary full">♫ Auto Transcribe with Gemini</button>
+      <div id="transcribeStatus" class="tiny-note"></div>
       <label class="field-label" for="transcript">Original transcript / story notes</label>
       <textarea id="transcript" rows="7" placeholder="Movie ထဲက စကားပြောစာသား သို့မဟုတ် ဇာတ်လမ်းအကျဉ်းကို ဒီမှာ paste လုပ်ပါ…"></textarea>
       <div class="split-fields"><label class="field-label">Output language<select id="language"><option value="my">မြန်မာဘာသာ</option><option value="en">English</option></select></label><button id="generateScript" class="secondary">✦ Gemini နဲ့ Script ထုတ်မယ်</button></div>
