@@ -58,6 +58,23 @@ function uploadVideo(file) {
 }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 $('toScript').addEventListener('click', () => showPage(2));
+$('autoTranscribe').addEventListener('click', async () => {
+  if (!state.file) return toast('အရင် video upload လုပ်ပါ။', true);
+  if (!state.apiKey) $('apiPanel').classList.remove('hidden');
+  const b=$('autoTranscribe'); b.disabled=true; b.textContent='Transcribing…'; $('transcribeStatus').textContent='Audio ကိုခွဲပြီး Gemini နဲ့ စစ်ဆေးနေပါတယ်။';
+  try {
+    const d=await api('/api/transcribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fileId:state.file.id})});
+    const poll=async()=> {
+      try {
+        const job=await api('/api/jobs/'+d.jobId);
+        $('transcribeStatus').textContent=(job.progress||0)+'% · '+(job.message||job.state);
+        if(job.state==='done') { clearInterval(timer); $('transcript').value=job.transcript||''; saveProject(); b.disabled=false; b.textContent='♫ Auto Transcribe with Gemini'; $('transcribeStatus').textContent='Transcript ready · '+(job.chunkCount||0)+' audio chunks'; toast('Transcript ထုတ်ပြီးပါပြီ။'); }
+        else if(job.state==='failed') { clearInterval(timer); b.disabled=false; b.textContent='♫ Retry Auto Transcribe'; $('transcribeStatus').textContent=job.message||'Transcription failed'; toast(job.message||'Transcription failed',true); }
+      } catch(e) { clearInterval(timer); b.disabled=false; b.textContent='♫ Retry Auto Transcribe'; toast(e.message,true); }
+    };
+    await poll(); var timer=setInterval(poll,2500);
+  } catch(e) { b.disabled=false; b.textContent='♫ Retry Auto Transcribe'; $('transcribeStatus').textContent=e.message; toast(e.message,true); }
+});
 $('generateScript').addEventListener('click', async () => { const transcript=$('transcript').value.trim(); if(!state.apiKey) $('apiPanel').classList.remove('hidden'); if(!transcript) return toast('Transcript / story notes ထည့်ပါ။',true); const b=$('generateScript'); b.disabled=true; b.textContent='Generating…'; try { const d=await api('/api/recap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript,language:$('language').value})}); $('script').value=d.script; toast('Recap script ထုတ်ပြီးပါပြီ။'); } catch(e){toast(e.message,true);} finally {b.disabled=false;b.textContent='✦ Gemini နဲ့ Script ထုတ်မယ်';} });
 $('toVoice').addEventListener('click', () => { if(!$('script').value.trim()) { toast('Script ကို ထည့်ပါ။',true); return; } $('subtitleOverlay').textContent=$('script').value.trim().split(/[.!?\n]/)[0].slice(0,110)||'မြန်မာ recap စာတန်း'; $('overlayText').value=$('subtitleOverlay').textContent; showPage(3); });
 $('generateVoice').addEventListener('click', async () => { const text=$('script').value.trim(); if(!text) return toast('အရင် script ထည့်ပါ။',true); if(!state.apiKey) $('apiPanel').classList.remove('hidden'); const b=$('generateVoice'); b.disabled=true; b.textContent='Generating voice…'; try { const d=await api('/api/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})}); state.voiceUrl=d.audioUrl; state.voiceId=d.voiceId; saveProject(); $('voicePlayer').src=d.audioUrl; $('voicePlayer').classList.remove('hidden'); $('voiceDownload').href=d.audioUrl; $('voiceDownload').classList.remove('hidden'); toast('AI voice ထုတ်ပြီးပါပြီ။'); } catch(e){toast(e.message,true);} finally{b.disabled=false;b.textContent='♫ Generate Myanmar Voice';} });
