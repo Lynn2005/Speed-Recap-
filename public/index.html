@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="my">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1020">
+  <title>Speed Recap Studio</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><span class="brand-mark">S</span><span><b>Speed Recap</b><small>AI MOVIE RECAP STUDIO</small></span></a>
+    <button id="settingsToggle" class="ghost-btn" type="button">⚙ API</button>
+  </header>
+  <main class="shell">
+    <section class="hero">
+      <div class="eyebrow"><span class="pulse"></span> ONE WORKSPACE · FOUR STEPS</div>
+      <h1>Movie ကို <span>Recap</span> လုပ်မယ်</h1>
+      <p>Upload လုပ်၊ မြန်မာ recap စာသားရေး၊ AI အသံထုတ်ပြီး video ကို live edit နဲ့ export လုပ်ပါ။</p>
+    </section>
+    <section id="apiPanel" class="api-panel hidden">
+      <div><b>Gemini API Key</b><p>ဒီ session အတွင်းသာ သုံးပါမယ်။ Browser storage မှာ မသိမ်းပါ။</p></div>
+      <input id="apiKey" type="password" autocomplete="off" placeholder="Gemini API key ထည့်ပါ">
+      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">API key ရယူရန် ↗</a>
+    </section>
+    <nav class="steps" aria-label="Workflow">
+      <button class="step active" data-page="1"><span>01</span><b>Upload</b><small>Video</small></button>
+      <button class="step" data-page="2"><span>02</span><b>Script</b><small>Transcript</small></button>
+      <button class="step" data-page="3"><span>03</span><b>Voice & Edit</b><small>Live editor</small></button>
+      <button class="step" data-page="4"><span>04</span><b>Export</b><small>Final video</small></button>
+    </nav>
+
+    <section class="page active" data-panel="1">
+      <div class="section-head"><div><span class="kicker">STEP 01</span><h2>Upload your video</h2><p>MP4, MOV, MKV, WEBM စသည်တို့ · အများဆုံး 900 MB</p></div><span class="counter">01 / 04</span></div>
+      <label id="dropZone" class="dropzone">
+        <input id="videoFile" type="file" accept="video/*,.mkv,.avi,.mpeg" hidden>
+        <span class="upload-icon">↑</span><strong>Video ကို ဒီနေရာမှာရွေးပါ</strong><span>ဖုန်းထဲက file ကို ရွေးနိုင်ပါတယ်</span><small>MP4 · MOV · MKV · WEBM · AVI</small>
+      </label>
+      <div id="uploadProgressWrap" class="progress-wrap hidden"><div class="progress-label"><span id="uploadLabel">Uploading…</span><b id="uploadPct">0%</b></div><div class="progress"><i id="uploadProgress"></i></div></div>
+      <div id="fileMeta" class="file-meta hidden"></div>
+      <div class="actions"><span class="hint">Video အရွယ်အစားကြီးရင် upload ကြာနိုင်ပါတယ်။</span><button id="toScript" class="primary" disabled>Next: Script <span>→</span></button></div>
+    </section>
+
+    <section class="page" data-panel="2">
+      <div class="section-head"><div><span class="kicker">STEP 02</span><h2>Transcript & recap</h2><p>Transcript ကိုထည့်ပြီး မြန်မာ narration script ထုတ်ပါ။</p></div><span class="counter">02 / 04</span></div>
+      <div class="notice">ဒီ build မှာ arbitrary movie ကနေ automatic timestamped ASR မပါသေးပါ။ ရှိပြီးသား transcript ကို paste လုပ်ပါ၊ သို့မဟုတ် script ကို ကိုယ်တိုင်ထည့်ပါ။</div>
+      <label class="field-label" for="transcript">Original transcript / story notes</label>
+      <textarea id="transcript" rows="7" placeholder="Movie ထဲက စကားပြောစာသား သို့မဟုတ် ဇာတ်လမ်းအကျဉ်းကို ဒီမှာ paste လုပ်ပါ…"></textarea>
+      <div class="split-fields"><label class="field-label">Output language<select id="language"><option value="my">မြန်မာဘာသာ</option><option value="en">English</option></select></label><button id="generateScript" class="secondary">✦ Gemini နဲ့ Script ထုတ်မယ်</button></div>
+      <label class="field-label" for="script">Recap narration (ပြင်လို့ရသည်)</label>
+      <textarea id="script" rows="8" placeholder="Gemini ထုတ်ပေးတဲ့ recap script ဒီမှာပေါ်ပါမယ်။ ကိုယ်တိုင်လည်း ရေးနိုင်ပါတယ်။"></textarea>
+      <div class="actions"><button class="ghost-btn back" data-back="1">← Back</button><button class="primary" id="toVoice">Next: Voice & Edit →</button></div>
+    </section>
+
+    <section class="page" data-panel="3">
+      <div class="section-head"><div><span class="kicker">STEP 03</span><h2>AI voice & Live Edit</h2><p>Preview ပေါ်က element တွေကို လက်နဲ့ရွှေ့၊ ထောင့်ကိုဆွဲပြီး အရွယ်အစားချိန်နိုင်ပါတယ်။</p></div><span class="counter">03 / 04</span></div>
+      <div class="editor-layout">
+        <div class="preview-column">
+          <div class="preview-toolbar"><span>LIVE PREVIEW</span><select id="aspect"><option value="9:16">9:16 Vertical</option><option value="16:9">16:9 Landscape</option><option value="1:1">1:1 Square</option></select></div>
+          <div id="preview" class="preview aspect-916">
+            <video id="previewVideo" playsinline controls></video>
+            <div id="blurOverlay" class="overlay blur-overlay hidden" data-kind="blur"><span>BLUR</span><i class="resize-handle"></i></div>
+            <div id="subtitleOverlay" class="overlay subtitle-overlay" data-kind="subtitle">မြန်မာ recap စာတန်း</div>
+            <div id="textOverlay" class="overlay text-overlay hidden" data-kind="text">သင့်စာသား</div>
+            <div id="logoOverlay" class="overlay logo-overlay hidden" data-kind="logo">LOGO</div>
+          </div>
+          <p class="tiny-note">Element ကိုနှိပ်ပြီး ရွှေ့ပါ။ အောက်ညာထောင့်က handle ကိုဆွဲပြီး resize လုပ်ပါ။</p>
+        </div>
+        <div class="editor-controls">
+          <div class="control-card"><b>AI Voice</b><p>Gemini TTS နဲ့ narration အသံထုတ်ပါ။</p><button id="generateVoice" class="secondary full">♫ Generate Myanmar Voice</button><audio id="voicePlayer" controls class="full hidden"></audio><a id="voiceDownload" class="hidden" download="speed-recap-voice.wav">အသံဖိုင်ဖွင့် / Download ↗</a></div>
+          <div class="control-card"><b>Live Edit</b><p>Tool ရွေးပြီး preview ပေါ်မှာ တိုက်ရိုက်ချိန်ပါ။</p>
+            <div class="tool-grid"><button data-tool="subtitle" class="tool selected">စာတန်း</button><button data-tool="text" class="tool">စာသား</button><button data-tool="logo" class="tool">Logo</button><button data-tool="blur" class="tool">Blur</button></div>
+            <label class="field-label">Selected text<input id="overlayText" value="မြန်မာ recap စာတန်း"></label>
+            <label class="field-label">Text size<input id="fontSize" type="range" min="12" max="42" value="22"></label>
+            <label class="field-label">Blur effect<select id="blurAmount"><option value="8">Light</option><option value="16" selected>Medium</option><option value="28">Strong</option></select></label>
+            <label class="field-label">Mirror video<select id="mirror"><option value="no">Off</option><option value="yes">On</option></select></label>
+          </div>
+        </div>
+      </div>
+      <div class="actions"><button class="ghost-btn back" data-back="2">← Back</button><button class="primary" id="toExport">Next: Export →</button></div>
+    </section>
+
+    <section class="page" data-panel="4">
+      <div class="section-head"><div><span class="kicker">STEP 04</span><h2>Final export</h2><p>FFmpeg နဲ့ MP4 export လုပ်ပါ။ Export ကြာချိန်က video size နဲ့ server CPU ပေါ်မူတည်ပါတယ်။</p></div><span class="counter">04 / 04</span></div>
+      <div class="export-summary" id="exportSummary"><span class="summary-icon">▶</span><div><b>Ready to export</b><p>Aspect ratio, mirror, blur and subtitle settings ကို သုံးပါမယ်။</p></div></div>
+      <div id="exportProgressWrap" class="progress-wrap hidden"><div class="progress-label"><span id="exportLabel">Preparing…</span><b id="exportPct">0%</b></div><div class="progress"><i id="exportProgress"></i></div></div>
+      <div id="exportResult" class="hidden result-card"></div>
+      <div class="actions"><button class="ghost-btn back" data-back="3">← Back to edit</button><button id="startExport" class="primary">⚡ Export MP4</button></div>
+    </section>
+    <div id="toast" class="toast hidden" role="status"></div>
+    <footer>Speed Recap Studio · Process only videos you own or have permission to use.</footer>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
