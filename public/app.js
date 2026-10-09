@@ -53,10 +53,54 @@ function uploadVideo(file) {
   const xhr = new XMLHttpRequest(); xhr.open('POST', '/api/upload');
   if (state.apiKey) xhr.setRequestHeader('x-gemini-api-key', state.apiKey);
   xhr.upload.onprogress = e => { if (e.lengthComputable) { const p = Math.round(e.loaded/e.total*100); $('uploadPct').textContent = p+'%'; $('uploadProgress').style.width = p+'%'; } };
-  xhr.onload = () => { let data = {}; try { data = JSON.parse(xhr.responseText); } catch {} if(xhr.status<200||xhr.status>=300) { toast(data.error||'Upload failed',true); $('uploadLabel').textContent='Upload failed'; return; } state.file = data.file; saveProject(); $('uploadPct').textContent='100%'; $('uploadProgress').style.width='100%'; $('uploadLabel').textContent='Upload complete'; $('fileMeta').classList.remove('hidden'); $('fileMeta').innerHTML='<b>✓ Video ready</b><br>'+escapeHtml(state.file.name)+' · '+fmtBytes(state.file.size)+' · '+(state.file.width||'?')+'×'+(state.file.height||'?')+' · '+Math.round(state.file.duration)+' sec'; $('toScript').disabled=false; $('previewVideo').src=URL.createObjectURL(file); $('exportSummary').querySelector('b').textContent=state.file.name; toast('Video upload အောင်မြင်ပါပြီ။'); };
+  xhr.onload = () => { let data = {}; try { data = JSON.parse(xhr.responseText); } catch {} if(xhr.status<200||xhr.status>=300) { toast(data.error||'Upload failed',true); $('uploadLabel').textContent='Upload failed'; return; } state.file = data.file; saveProject(); $('oneClick').disabled=false; $('uploadPct').textContent='100%'; $('uploadProgress').style.width='100%'; $('uploadLabel').textContent='Upload complete'; $('fileMeta').classList.remove('hidden'); $('fileMeta').innerHTML='<b>✓ Video ready</b><br>'+escapeHtml(state.file.name)+' · '+fmtBytes(state.file.size)+' · '+(state.file.width||'?')+'×'+(state.file.height||'?')+' · '+Math.round(state.file.duration)+' sec'; $('toScript').disabled=false; $('previewVideo').src=URL.createObjectURL(file); $('exportSummary').querySelector('b').textContent=state.file.name; toast('Video upload အောင်မြင်ပါပြီ။'); };
   xhr.onerror = () => { toast('Network error ဖြစ်နေပါတယ်။ ထပ်ကြိုးစားပါ။',true); $('uploadLabel').textContent='Upload failed'; }; xhr.send(form);
 }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function waitForJob(id, onUpdate) {
+  while (true) {
+    await new Promise(resolve => setTimeout(resolve, 2500));
+    const job = await api('/api/jobs/' + id);
+    if (onUpdate) onUpdate(job);
+    if (job.state === 'done') return job;
+    if (job.state === 'failed') throw new Error(job.message || 'Job failed');
+  }
+}
+function buildExportSettings() {
+  const preview=$('preview');
+  const overlayData={};
+  for(const kind of ['subtitle','text','logo','blur']) {
+    const el=$(({subtitle:'subtitleOverlay',text:'textOverlay',logo:'logoOverlay',blur:'blurOverlay'})[kind]);
+    overlayData[kind]={x:el.offsetLeft/preview.clientWidth,y:el.offsetTop/preview.clientHeight,w:el.offsetWidth/preview.clientWidth,h:el.offsetHeight/preview.clientHeight,visible:!el.classList.contains('hidden'),text:el.textContent,fontSize:parseFloat(getComputedStyle(el).fontSize)||22};
+  }
+  return {aspect:$('aspect').value,mirror:$('mirror').value==='yes',blurAmount:$('blurAmount').value,overlays:overlayData};
+}
+$('oneClick').addEventListener('click', async () => {
+  if(!state.file) return toast('အရင် video upload လုပ်ပါ။',true);
+  if(!state.apiKey) { $('apiPanel').classList.remove('hidden'); return toast('Gemini API key ထည့်ပြီး One-click ကို ထပ်နှိပ်ပါ။',true); }
+  const b=$('oneClick'); b.disabled=true; b.textContent='① Transcribing…';
+  try {
+    showPage(2);
+    const t=await api('/api/transcribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fileId:state.file.id})});
+    const tj=await waitForJob(t.jobId,j=>{b.textContent='① Transcript '+(j.progress||0)+'%';$('transcribeStatus').textContent=j.message||'';});
+    $('transcript').value=tj.transcript||''; saveProject();
+    b.textContent='② Generating recap…';
+    const rec=await api('/api/recap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript:$('transcript').value,language:$('language').value})});
+    $('script').value=rec.script; saveProject();
+    showPage(3); b.textContent='③ Generating AI voice…';
+    const voice=await api('/api/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:rec.script})});
+    state.voiceId=voice.voiceId; state.voiceUrl=voice.audioUrl; saveProject();
+    $('voicePlayer').src=voice.audioUrl; $('voicePlayer').classList.remove('hidden'); $('voiceDownload').href=voice.audioUrl; $('voiceDownload').classList.remove('hidden');
+    $('subtitleOverlay').textContent=rec.script.split(/[.!?\\n]/)[0].slice(0,110)||'မြန်မာ recap'; $('overlayText').value=$('subtitleOverlay').textContent;
+    b.textContent='④ Exporting MP4…'; showPage(4);
+    const exp=await api('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fileId:state.file.id,voiceId:state.voiceId,settings:buildExportSettings()})});
+    $('exportProgressWrap').classList.remove('hidden');
+    const ej=await waitForJob(exp.jobId,j=>{$('exportPct').textContent=(j.progress||0)+'%';$('exportProgress').style.width=(j.progress||0)+'%';$('exportLabel').textContent=j.message||'Rendering…';});
+    $('exportResult').classList.remove('hidden');$('exportResult').innerHTML='<b>✓ Export complete</b><p>Your MP4 is ready.</p><a href="'+ej.downloadUrl+'" download>Download final MP4 ↗</a>';
+    toast('One-click recap ပြီးပါပြီ။');
+  } catch(e) { toast(e.message,true); }
+  finally { b.disabled=false; b.textContent='⚡ One-click Recap'; }
+});
 $('toScript').addEventListener('click', () => showPage(2));
 $('autoTranscribe').addEventListener('click', async () => {
   if (!state.file) return toast('အရင် video upload လုပ်ပါ။', true);
@@ -89,14 +133,7 @@ $('startExport').addEventListener('click', async () => {
   if(!state.file) return toast('Video upload လုပ်ပါ။',true);
   const b=$('startExport'); b.disabled=true; b.textContent='Export starting…'; $('exportProgressWrap').classList.remove('hidden'); $('exportResult').classList.add('hidden');
   try {
-    const preview=$('preview');
-    const overlayData = {};
-    for (const kind of ['subtitle','text','logo','blur']) {
-      const el = $(({subtitle:'subtitleOverlay',text:'textOverlay',logo:'logoOverlay',blur:'blurOverlay'})[kind]);
-      const rect = { x: el.offsetLeft / preview.clientWidth, y: el.offsetTop / preview.clientHeight, w: el.offsetWidth / preview.clientWidth, h: el.offsetHeight / preview.clientHeight };
-      overlayData[kind] = { ...rect, visible: !el.classList.contains('hidden'), text: el.textContent, fontSize: parseFloat(getComputedStyle(el).fontSize) || 22 };
-    }
-    const settings={aspect:$('aspect').value,mirror:$('mirror').value==='yes',blurAmount:$('blurAmount').value,overlays:overlayData};
+    const settings=buildExportSettings();
     const d=await api('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fileId:state.file.id,voiceId:state.voiceId,settings})});
     pollJob(d.jobId);
   } catch(e){toast(e.message,true);b.disabled=false;b.textContent='⚡ Export MP4';}
