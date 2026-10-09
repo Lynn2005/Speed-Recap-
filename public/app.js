@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-const state = { file: null, activePage: 1, apiKey: '', voiceUrl: null, selectedTool: 'subtitle', jobPoll: null, positions: {} };
+const state = { file: null, activePage: 1, apiKey: '', voiceUrl: null, voiceId: null, selectedTool: 'subtitle', jobPoll: null, positions: {} };
 const pages = [...document.querySelectorAll('.page')];
 const stepButtons = [...document.querySelectorAll('.step')];
 const toast = (message, error = false) => { $('toast').textContent = message; $('toast').classList.toggle('error', error); $('toast').classList.remove('hidden'); clearTimeout(toast.timer); toast.timer = setTimeout(() => $('toast').classList.add('hidden'), 4500); };
@@ -29,7 +29,7 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;'
 $('toScript').addEventListener('click', () => showPage(2));
 $('generateScript').addEventListener('click', async () => { const transcript=$('transcript').value.trim(); if(!state.apiKey) $('apiPanel').classList.remove('hidden'); if(!transcript) return toast('Transcript / story notes ထည့်ပါ။',true); const b=$('generateScript'); b.disabled=true; b.textContent='Generating…'; try { const d=await api('/api/recap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript,language:$('language').value})}); $('script').value=d.script; toast('Recap script ထုတ်ပြီးပါပြီ။'); } catch(e){toast(e.message,true);} finally {b.disabled=false;b.textContent='✦ Gemini နဲ့ Script ထုတ်မယ်';} });
 $('toVoice').addEventListener('click', () => { if(!$('script').value.trim()) { toast('Script ကို ထည့်ပါ။',true); return; } $('subtitleOverlay').textContent=$('script').value.trim().split(/[.!?\n]/)[0].slice(0,110)||'မြန်မာ recap စာတန်း'; $('overlayText').value=$('subtitleOverlay').textContent; showPage(3); });
-$('generateVoice').addEventListener('click', async () => { const text=$('script').value.trim(); if(!text) return toast('အရင် script ထည့်ပါ။',true); if(!state.apiKey) $('apiPanel').classList.remove('hidden'); const b=$('generateVoice'); b.disabled=true; b.textContent='Generating voice…'; try { const d=await api('/api/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})}); state.voiceUrl=d.audioUrl; $('voicePlayer').src=d.audioUrl; $('voicePlayer').classList.remove('hidden'); $('voiceDownload').href=d.audioUrl; $('voiceDownload').classList.remove('hidden'); toast('AI voice ထုတ်ပြီးပါပြီ။'); } catch(e){toast(e.message,true);} finally{b.disabled=false;b.textContent='♫ Generate Myanmar Voice';} });
+$('generateVoice').addEventListener('click', async () => { const text=$('script').value.trim(); if(!text) return toast('အရင် script ထည့်ပါ။',true); if(!state.apiKey) $('apiPanel').classList.remove('hidden'); const b=$('generateVoice'); b.disabled=true; b.textContent='Generating voice…'; try { const d=await api('/api/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})}); state.voiceUrl=d.audioUrl; state.voiceId=d.voiceId; $('voicePlayer').src=d.audioUrl; $('voicePlayer').classList.remove('hidden'); $('voiceDownload').href=d.audioUrl; $('voiceDownload').classList.remove('hidden'); toast('AI voice ထုတ်ပြီးပါပြီ။'); } catch(e){toast(e.message,true);} finally{b.disabled=false;b.textContent='♫ Generate Myanmar Voice';} });
 $('aspect').addEventListener('change', e => { $('preview').classList.remove('aspect-916','aspect-169','aspect-11'); $('preview').classList.add(e.target.value==='9:16'?'aspect-916':e.target.value==='16:9'?'aspect-169':'aspect-11'); });
 document.querySelectorAll('[data-tool]').forEach(b => b.addEventListener('click', () => { state.selectedTool=b.dataset.tool; document.querySelectorAll('[data-tool]').forEach(x=>x.classList.toggle('selected',x===b)); const map={subtitle:'subtitleOverlay',text:'textOverlay',logo:'logoOverlay',blur:'blurOverlay'}; const el=$(map[state.selectedTool]); el.classList.remove('hidden'); document.querySelectorAll('.overlay').forEach(x=>x.classList.toggle('selected',x===el)); if(state.selectedTool==='subtitle') $('overlayText').value=$('subtitleOverlay').textContent; if(state.selectedTool==='text') $('overlayText').value=$('textOverlay').textContent; if(state.selectedTool==='logo') $('overlayText').value=$('logoOverlay').textContent; }));
 $('overlayText').addEventListener('input', e => { const map={subtitle:'subtitleOverlay',text:'textOverlay',logo:'logoOverlay'}; if(map[state.selectedTool]) $(map[state.selectedTool]).textContent=e.target.value; });
@@ -41,8 +41,15 @@ $('startExport').addEventListener('click', async () => {
   if(!state.file) return toast('Video upload လုပ်ပါ။',true);
   const b=$('startExport'); b.disabled=true; b.textContent='Export starting…'; $('exportProgressWrap').classList.remove('hidden'); $('exportResult').classList.add('hidden');
   try {
-    const settings={aspect:$('aspect').value,mirror:$('mirror').value==='yes',blur:!$('blurOverlay').classList.contains('hidden'),subtitle:$('subtitleOverlay').textContent};
-    const d=await api('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fileId:state.file.id,settings})});
+    const preview=$('preview');
+    const overlayData = {};
+    for (const kind of ['subtitle','text','logo','blur']) {
+      const el = $(({subtitle:'subtitleOverlay',text:'textOverlay',logo:'logoOverlay',blur:'blurOverlay'})[kind]);
+      const rect = { x: el.offsetLeft / preview.clientWidth, y: el.offsetTop / preview.clientHeight, w: el.offsetWidth / preview.clientWidth, h: el.offsetHeight / preview.clientHeight };
+      overlayData[kind] = { ...rect, visible: !el.classList.contains('hidden'), text: el.textContent, fontSize: parseFloat(getComputedStyle(el).fontSize) || 22 };
+    }
+    const settings={aspect:$('aspect').value,mirror:$('mirror').value==='yes',blurAmount:$('blurAmount').value,overlays:overlayData};
+    const d=await api('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fileId:state.file.id,voiceId:state.voiceId,settings})});
     pollJob(d.jobId);
   } catch(e){toast(e.message,true);b.disabled=false;b.textContent='⚡ Export MP4';}
 });
