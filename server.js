@@ -104,6 +104,46 @@ app.post('/api/upload', (req, res) => {
   });
 });
 
+app.post('/api/transcribe', async (req, res) => {
+  const file = uploads.get(String(req.body.fileId || ''));
+  const apiKey = getKey(req);
+  if (!file || !fs.existsSync(file.path)) return res.status(404).json({ error: 'Upload video ကို ပြန်ရွေးပါ။' });
+  if (!apiKey) return res.status(400).json({ error: 'Gemini API key ထည့်ပါ။ https://aistudio.google.com/apikey' });
+  const id = randomUUID();
+  const job = { id, type: 'transcribe', state: 'processing', progress: 2, message: 'Extracting audio chunks', createdAt: new Date().toISOString() };
+  jobs.set(id, job);
+  res.json({ jobId: id, state: job.state });
+  (async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speed-recap-asr-'));
+    try {
+      await run('ffmpeg', ['-y','-i',file.path,'-vn','-ac','1','-ar','16000','-f','segment','-segment_time','120','-reset_timestamps','1','-c:a','libmp3lame','-b:a','48k',path.join(tempDir,'chunk-%03d.mp3')], 60 * 60 * 1000);
+      const chunks = fs.readdirSync(tempDir).filter(n => n.endsWith('.mp3')).sort();
+      if (!chunks.length) throw new Error('ဒီ video မှာ transcribe လုပ်နိုင်တဲ့ audio မတွေ့ပါ။');
+      let transcript = '';
+      for (let i = 0; i < chunks.length; i++) {
+        job.progress = Math.min(92, 5 + Math.round((i / chunks.length) * 85));
+        job.message = 'Transcribing audio chunk ' + (i + 1) + ' / ' + chunks.length;
+        const audio = fs.readFileSync(path.join(tempDir, chunks[i])).toString('base64');
+        const prompt = 'Transcribe all audible speech in this audio clip as accurately as possible, in the original spoken language. Do not summarize or translate. Return one spoken utterance per line, each with an approximate timestamp relative to the beginning of THIS clip in HH:MM:SS format, like 00:00:04 | words. If no speech is audible, return [No speech]. Do not invent words.';
+        const data = await geminiGenerate(apiKey, 'gemini-2.5-flash', [{ role: 'user', parts: [{ text: prompt }, { inlineData: { mimeType: 'audio/mpeg', data: audio } }] }], { temperature: 0.1 });
+        let chunkText = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('\n').trim();
+        const offset = i * 120;
+        chunkText = chunkText.replace(/\b(\d{2}):(\d{2}):(\d{2})\b/g, (_m,h,m,s) => {
+          const total = Number(h) * 3600 + Number(m) * 60 + Number(s) + offset;
+          return [Math.floor(total / 3600), Math.floor((total % 3600) / 60), total % 60].map(n => String(n).padStart(2,'0')).join(':');
+        });
+        if (chunkText && chunkText !== '[No speech]') transcript += (transcript ? '\n' : '') + chunkText;
+      }
+      if (!transcript.trim()) throw new Error('စကားပြော transcript မတွေ့ပါ။');
+      job.state = 'done'; job.progress = 100; job.message = 'Transcription complete'; job.transcript = transcript; job.chunkCount = chunks.length;
+    } catch (e) {
+      job.state = 'failed'; job.message = safeError(e);
+    } finally {
+      fs.rm(tempDir, { recursive: true, force: true }, () => {});
+    }
+  })();
+});
+
 app.post('/api/recap', async (req, res) => {
   try {
     const apiKey = getKey(req);
