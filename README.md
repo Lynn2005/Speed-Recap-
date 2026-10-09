@@ -1,32 +1,29 @@
-# Speed Recap Studio
+# Lynn Recap Streamlit Studio
 
-Mobile-friendly video recap workspace built with Node.js, Express, FFmpeg/FFprobe and Gemini API support.
+Mobile-friendly Streamlit app for a four-step Myanmar movie recap workflow.
 
-## Features in this starter
-- Upload large video files (configurable; default 900 MB) to the server.
-- Four-step workflow: Upload, Script, Voice, Final Export.
-- Gemini-powered Myanmar recap script generation from a supplied transcript.
-- Gemini text-to-speech endpoint with WAV output.
-- Browser live editor with draggable/resizable subtitle, logo, text and blur overlays.
-- FFmpeg export with aspect-ratio presets, mirror, blur and subtitle burn-in.
-- Job status endpoints and server-side file handling.
-- Docker + Render Blueprint configuration.
+## Features
+- Upload movie/video and extract timed original SRT with Groq Whisper (`whisper-large-v3-turbo`).
+- Translate subtitles into natural Myanmar Burmese with Gemini.
+- Generate Myanmar narration with Gemini text-to-speech.
+- Live edit preview with draggable/resizable blur region, subtitle, logo and text overlays.
+- Mirror video, adjust blur, subtitle size and original-audio mix, then export MP4 with FFmpeg.
+- Generate and download a thumbnail and the final MP4.
+- Session-only API key inputs; no key is saved into source files.
 
-## Requirements
-- Node.js 20+ and FFmpeg/FFprobe, or Docker.
-- A Gemini API key. You can obtain one at https://aistudio.google.com/apikey.
-- Upload only videos you own or are authorized to process.
+## API keys
+- Groq key (for fast SRT): https://console.groq.com/keys
+- Gemini key (translation and AI voice): https://aistudio.google.com/apikey
 
-## Local run
-```bash
-npm install
-cp .env.example .env
-npm start
-```
-Set `GEMINI_API_KEY` in `.env` for server-side Gemini requests, or enter a key in the UI for the current session. UI-entered keys are not saved in browser storage.
+## Streamlit Community Cloud
+1. Open https://share.streamlit.io/ and select this repository and branch `main`.
+2. Set the main file path to `app.py`.
+3. Streamlit installs `requirements.txt` and system packages from `packages.txt`.
 
 ## Render
-The repository includes `render.yaml` and a Dockerfile. Connect the repository to Render as a Docker Web Service. For persistent uploads and exports, configure a persistent disk mounted at `/var/data`; add `GEMINI_API_KEY` as a secret environment variable. Render deploys from the connected branch according to the service's auto-deploy settings.
+Connect this repository to Render as a Docker Web Service using `render.yaml`. The Docker image installs Python, Streamlit, FFmpeg and Noto fonts.
 
-## Important scope notes
-Gemini audio transcription is available as a separate job: the server extracts audio into 2-minute chunks and asks Gemini for transcript lines with approximate timestamps. Accuracy and timing depend on the audio and model output; review the transcript before generating the recap. Export duration depends on the instance's CPU, available disk and input video size. Render's free filesystem is ephemeral, so persistent project files across service restarts require persistent storage; a 900 MB upload target also depends on the hosting plan's request-size and disk limits.
+## Notes
+- Streamlit Cloud has resource and request-size limits; 900 MB videos may exceed available memory or upload limits even though the app requests a 900 MB maximum. Render capacity and disk limits also depend on the selected plan.
+- Render free filesystem is ephemeral. Download SRT, voice, MP4 and thumbnail when each step completes.
+- Review generated transcripts and translations before publishing. Only process video you own or are authorized to use.
