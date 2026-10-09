@@ -17,6 +17,7 @@ fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_MB || 900) * 1024 * 1024;
 const uploads = new Map();
 const jobs = new Map();
+const voiceOutputs = new Map();
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -138,13 +139,15 @@ app.post('/api/voice', async (req, res) => {
     const id = randomUUID();
     const outPath = path.join(OUTPUT_DIR, id + '.wav');
     fs.writeFileSync(outPath, wav);
-    res.json({ audioUrl: '/api/output/' + id, mimeType: 'audio/wav', bytes: wav.length });
+    voiceOutputs.set(id, outPath);
+    res.json({ voiceId: id, audioUrl: '/api/output/' + id, mimeType: 'audio/wav', bytes: wav.length });
   } catch (e) { res.status(502).json({ error: safeError(e) }); }
 });
 
 app.post('/api/export', async (req, res) => {
   const file = uploads.get(String(req.body.fileId || ''));
   if (!file || !fs.existsSync(file.path)) return res.status(404).json({ error: 'Uploaded video not found. Please upload again after server restart.' });
+  const voicePath = voiceOutputs.get(String(req.body.voiceId || ''));
   const id = randomUUID();
   const outputPath = path.join(OUTPUT_DIR, id + '.mp4');
   const job = { id, state: 'processing', progress: 5, message: 'Preparing FFmpeg export', createdAt: new Date().toISOString() };
@@ -153,27 +156,61 @@ app.post('/api/export', async (req, res) => {
   (async () => {
     try {
       const s = req.body.settings || {};
-      const filters = [];
       const aspect = ['9:16','16:9','1:1'].includes(s.aspect) ? s.aspect : '9:16';
-      const target = aspect === '9:16' ? '1080:1920' : aspect === '1:1' ? '1080:1080' : '1920:1080';
-      filters.push('scale=' + target.replace(':', ':') + ':force_original_aspect_ratio=increase');
-      filters.push('crop=' + target.replace(':', ':'));
+      const dimensions = aspect === '9:16' ? { w: 1080, h: 1920 } : aspect === '1:1' ? { w: 1080, h: 1080 } : { w: 1920, h: 1080 };
+      const filters = [
+        'scale=' + dimensions.w + ':' + dimensions.h + ':force_original_aspect_ratio=increase',
+        'crop=' + dimensions.w + ':' + dimensions.h
+      ];
       if (s.mirror) filters.push('hflip');
-      if (s.blur === true || s.blur === 'true') filters.push('boxblur=10:2');
-      if (s.subtitle && String(s.subtitle).trim()) {
-        const subtitlePath = path.join(OUTPUT_DIR, id + '.srt');
-        const lines = String(s.subtitle).replace(/\r/g,'').split('\n').filter(Boolean);
-        const srt = lines.map((line, i) => (i + 1) + '\n' + '00:00:' + String(i * 4).padStart(2,'0') + ',000 --> 00:00:' + String(i * 4 + 4).padStart(2,'0') + ',000\n' + line).join('\n\n');
-        fs.writeFileSync(subtitlePath, srt, 'utf8');
-        filters.push('subtitles=' + subtitlePath.replace(/\\/g,'/').replace(/:/g,'\\:') + ':force_style=FontName=Noto Sans Myanmar,FontSize=22,Outline=2,Shadow=1,Alignment=2');
+      const overlays = s.overlays || {};
+      const clamp = (v, min, max) => Math.max(min, Math.min(max, Number(v) || 0));
+      const coords = o => ({
+        x: Math.round(clamp(o?.x, 0, 1) * dimensions.w),
+        y: Math.round(clamp(o?.y, 0, 1) * dimensions.h),
+        w: Math.max(40, Math.round(clamp(o?.w, 0.02, 1) * dimensions.w)),
+        h: Math.max(25, Math.round(clamp(o?.h, 0.02, 1) * dimensions.h))
+      });
+      const blur = overlays.blur && overlays.blur.visible ? coords(overlays.blur) : null;
+      const esc = value => String(value || '').replace(/\\\\/g, '\\\\\\\\').replace(/:/g, '\\\\:').replace(/'/g, "\\\\'").replace(/,/g, '\\\\,').replace(/;/g, '\\\\;').replace(/\\[/g, '\\\\[').replace(/\\]/g, '\\\\]').replace(/%/g, '\\\\%').replace(/\\n/g, ' ');
+      const drawtext = (kind, o) => {
+        if (!o || !o.visible || !String(o.text || '').trim()) return null;
+        const c = coords(o);
+        const fs = Math.round(clamp(o.fontSize, 12, 100) * dimensions.w / 360);
+        const color = kind === 'logo' ? '0x75f0c5' : 'white';
+        const box = kind === 'subtitle' || kind === 'text' ? ':box=1:boxcolor=black@0.55:boxborderw=8' : ':box=1:boxcolor=0x10182a@0.8:boxborderw=5';
+        return 'drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf:text=\\'' + esc(o.text).slice(0, 250) + '\\':x=' + c.x + ':y=' + c.y + ':fontsize=' + fs + ':fontcolor=' + color + box;
+      };
+      let graph = '';
+      let current = 'v0';
+      if (blur) {
+        graph = '[0:v]' + filters.join(',') + '[base];[base]split[main][blurSrc];[blurSrc]crop=' + blur.w + ':' + blur.h + ':' + blur.x + ':' + blur.y + ',boxblur=' + clamp(s.blurAmount, 4, 30) + ':2[blurred];[main][blurred]overlay=' + blur.x + ':' + blur.y + '[v0]';
+      } else {
+        graph = '[0:v]' + filters.join(',') + '[v0]';
+      }
+      for (const kind of ['subtitle', 'text', 'logo']) {
+        const dt = drawtext(kind, overlays[kind]);
+        if (dt) {
+          const next = 'v' + (Number(current.slice(1)) + 1);
+          graph += ';[' + current + ']' + dt + '[' + next + ']';
+          current = next;
+        }
       }
       job.progress = 15; job.message = 'Rendering video with FFmpeg';
-      const args = ['-y','-i',file.path,'-vf',filters.join(','),'-c:v','libx264','-preset','veryfast','-crf','23','-c:a','aac','-b:a','128k','-movflags','+faststart','-progress','pipe:1',outputPath];
+      const args = ['-y', '-i', file.path];
+      if (voicePath && fs.existsSync(voicePath)) args.push('-i', voicePath);
+      args.push('-filter_complex', graph, '-map', '[' + current + ']');
+      if (voicePath && fs.existsSync(voicePath)) {
+        args.push('-map', '1:a:0', '-af', 'apad', '-shortest');
+      } else {
+        args.push('-map', '0:a:0?');
+      }
+      args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', '-progress', 'pipe:1', outputPath);
       const child = spawn('ffmpeg', args, { stdio: ['ignore','pipe','pipe'] });
       let stderr = '';
       child.stdout.on('data', chunk => {
         const txt = chunk.toString();
-        const m = txt.match(/out_time_ms=(\d+)/);
+        const m = txt.match(/out_time_ms=(\\d+)/);
         if (m && file.duration > 0) job.progress = Math.max(15, Math.min(95, 15 + Math.round(Number(m[1]) / 1000000 / file.duration * 80)));
       });
       child.stderr.on('data', d => { stderr += d.toString(); if (stderr.length > 12000) stderr = stderr.slice(-12000); });
