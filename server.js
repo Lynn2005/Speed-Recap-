@@ -271,6 +271,21 @@ app.post('/api/export', async (req, res) => {
   })();
 });
 
+app.post('/api/thumbnail', async (req, res) => {
+  try {
+    const file = uploads.get(String(req.body.fileId || ''));
+    if (!file || !fs.existsSync(file.path)) return res.status(404).json({ error: 'Upload video ကို ပြန်ရွေးပါ။' });
+    const id = randomUUID();
+    const outputPath = path.join(OUTPUT_DIR, id + '.jpg');
+    const seconds = Math.max(0, Math.min(Math.max(0, file.duration - 1), file.duration * 0.35));
+    const title = String(req.body.title || 'MOVIE RECAP').trim().slice(0, 80);
+    const esc = value => String(value).replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "\\'").replace(/,/g, '\\,').replace(/;/g, '\\;').replace(/%/g, '\\%').replace(/\n/g, ' ');
+    const vf = "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf:text='" + esc(title) + "':x=(w-text_w)/2:y=h-text_h-40:fontsize=52:fontcolor=white:box=1:boxcolor=black@0.68:boxborderw=20";
+    await run('ffmpeg', ['-y','-ss',String(seconds),'-i',file.path,'-frames:v','1','-vf',vf,'-q:v','2',outputPath], 90000);
+    res.json({ imageUrl: '/api/output/' + id, downloadName: 'speed-recap-thumbnail.jpg' });
+  } catch (e) { res.status(502).json({ error: safeError(e) }); }
+});
+
 app.get('/api/source/:id', (req, res) => {
   const file = uploads.get(String(req.params.id || ''));
   if (!file || !fs.existsSync(file.path)) return res.status(404).json({ error: 'Source video not found.' });
@@ -284,7 +299,7 @@ app.get('/api/jobs/:id', (req, res) => {
 });
 app.get('/api/output/:id', (req, res) => {
   const id = String(req.params.id).replace(/[^a-f0-9-]/gi, '');
-  const candidates = [path.join(OUTPUT_DIR, id + '.mp4'), path.join(OUTPUT_DIR, id + '.wav')];
+  const candidates = [path.join(OUTPUT_DIR, id + '.mp4'), path.join(OUTPUT_DIR, id + '.wav'), path.join(OUTPUT_DIR, id + '.jpg')];
   const file = candidates.find(p => fs.existsSync(p));
   if (!file) return res.status(404).json({ error: 'Output file not found. Files may be temporary on an ephemeral disk.' });
   res.download(file);
