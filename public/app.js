@@ -129,6 +129,17 @@ $('fontSize').addEventListener('input', e => { const el=$('subtitleOverlay'); el
 $('blurAmount').addEventListener('change', e => $('blurOverlay').style.backdropFilter='blur('+Number(e.target.value)/2+'px)');
 $('mirror').addEventListener('change', e => { $('previewVideo').style.transform=e.target.value==='yes'?'scaleX(-1)':'none'; saveProject(); });
 $('toExport').addEventListener('click', () => { if(!state.file) return toast('Video upload လုပ်ပါ။',true); showPage(4); });
+$('makeThumbnail').addEventListener('click', async () => {
+  if(!state.file) return toast('အရင် video upload လုပ်ပါ။',true);
+  const b=$('makeThumbnail'); b.disabled=true; b.textContent='Creating thumbnail…';
+  try {
+    const d=await api('/api/thumbnail',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fileId:state.file.id,title:$('thumbnailTitle').value})});
+    $('thumbnailPreview').src=d.imageUrl+'?t='+Date.now(); $('thumbnailPreview').classList.remove('hidden');
+    $('thumbnailDownload').href=d.imageUrl; $('thumbnailDownload').classList.remove('hidden');
+    toast('Thumbnail ready ဖြစ်ပါပြီ။');
+  } catch(e) { toast(e.message,true); }
+  finally { b.disabled=false; b.textContent='▧ Generate Thumbnail'; }
+});
 $('startExport').addEventListener('click', async () => {
   if(!state.file) return toast('Video upload လုပ်ပါ။',true);
   const b=$('startExport'); b.disabled=true; b.textContent='Export starting…'; $('exportProgressWrap').classList.remove('hidden'); $('exportResult').classList.add('hidden');
