@@ -1,19 +1,11 @@
 services:
   - type: web
-    name: speed-recap
+    name: lynn-recap-streamlit
     runtime: docker
     plan: free
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /api/health
+    healthCheckPath: /_stcore/health
     autoDeploy: true
     envVars:
-      - key: NODE_ENV
-        value: production
       - key: PORT
         value: "10000"
-      - key: DATA_DIR
-        value: /var/data/speed-recap
-      - key: MAX_UPLOAD_MB
-        value: "900"
-      - key: GEMINI_API_KEY
-        sync: false
