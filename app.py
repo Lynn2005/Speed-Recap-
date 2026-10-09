@@ -1,3 +1,4 @@
+import base64
 import re
 import subprocess
 import tempfile
@@ -78,7 +79,7 @@ def translate(srt,key):
 def voice_bytes(text,key,voice,speed):
     if not key: raise RuntimeError("Gemini API Key ထည့်ပါ။")
     if not text.strip(): raise RuntimeError("အသံထုတ်မည့်စာသား မရှိပါ။")
-    prompt = "Read the following text naturally in clear spoken Myanmar Burmese. Do not translate, summarize, or add words. Speaking speed preference: " + ("slightly slower" if speed < 0.9 else "slightly faster" if speed > 1.1 else "natural pace") + ".\\n\\n" + text[:12000]
+    prompt = "Read the following text naturally in clear spoken Myanmar Burmese. Do not translate, summarize, or add words. Speaking speed preference: " + ("slightly slower" if speed < 0.9 else "slightly faster" if speed > 1.1 else "natural pace") + ".\n\n" + text[:12000]
     error = "Gemini TTS မအောင်မြင်ပါ။"
     for model in ["gemini-2.5-flash-preview-tts","gemini-2.5-pro-preview-tts"]:
         try:
@@ -91,7 +92,7 @@ def voice_bytes(text,key,voice,speed):
             if not part: error="Gemini TTS က audio မပြန်ပေးပါ။"; continue
             raw=base64.b64decode(part["inlineData"]["data"])
             mime=part["inlineData"].get("mimeType","audio/pcm;rate=24000")
-            rate_match=re.search(r"rate=(\\d+)",mime)
+            rate_match=re.search(r"rate=(\d+)",mime)
             sample_rate=int(rate_match.group(1)) if rate_match else 24000
             channels=1; bits=16
             header=b"RIFF"+(36+len(raw)).to_bytes(4,"little")+b"WAVEfmt "+(16).to_bytes(4,"little")+(1).to_bytes(2,"little")+channels.to_bytes(2,"little")+sample_rate.to_bytes(4,"little")+(sample_rate*channels*bits//8).to_bytes(4,"little")+(channels*bits//8).to_bytes(2,"little")+bits.to_bytes(2,"little")+b"data"+len(raw).to_bytes(4,"little")
@@ -359,7 +360,7 @@ with tabs[3]:
             try:
                 with tempfile.TemporaryDirectory() as td:
                     root=Path(td); ext=Path(st.session_state.video_name or "video.mp4").suffix or ".mp4"
-                    vp=root/("input"+ext); ap=root/"voice.mp3"; op=root/"final.mp4"
+                    vp=root/("input"+ext); ap=root/"voice.wav"; op=root/"final.mp4"
                     vp.write_bytes(st.session_state.video_bytes); ap.write_bytes(st.session_state.voice_bytes)
                     filters=[]
                     if mirror: filters.append("hflip")
