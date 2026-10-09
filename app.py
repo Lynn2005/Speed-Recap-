@@ -178,33 +178,30 @@ def render_video(video_path, output_path, srt_text, voice_path=None, mirror=Fals
         filters.append("hflip")
     if blur > 0:
         filters.append(f"boxblur={int(blur)}:1")
-    # Subtitles are drawn after image effects.
     filters.append(f"subtitles='{escape_filter_path(srt_path)}':force_style='FontName=Noto Sans Myanmar,FontSize={int(subtitle_size)},Outline=2,Shadow=1,Alignment=2,MarginV=35'")
     if overlay_text.strip():
-        txt = escape_filter_path(workdir / "overlay.txt")
-        (workdir / "overlay.txt").write_text(overlay_text.replace("\n"," "), encoding="utf-8")
-        filters.append(f"drawtext=textfile='{txt}':font='Noto Sans Myanmar':fontcolor=white:fontsize=28:borderw=2:bordercolor=black:x=(w-text_w)/2:y=40")
-    vf = ",".join(filters)
-    if logo_path and Path(logo_path).exists():
-        cmd = ["ffmpeg","-y","-i",str(video_path),"-i",str(logo_path)]
-        if voice_path and Path(voice_path).exists():
-            cmd += ["-i",str(voice_path)]
-        cmd += ["-filter_complex",f"[0:v]{vf}[v0];[1:v]scale=iw*0.18:-1[logo];[v0][logo]overlay=W-w-24:24[vout]",
-                "-map","[vout]"]
-        if voice_path and Path(voice_path).exists():
-            cmd += ["-filter_complex",f"[0:v]{vf}[v0];[1:v]scale=iw*0.18:-1[logo];[v0][logo]overlay=W-w-24:24[vout];[2:a]volume=1[voice];[0:a]volume={max(0,min(100,audio_mix))/100}[orig];[orig][voice]amix=inputs=2:duration=first[aout]","-map","[aout]"]
-        else:
-            cmd += ["-map","0:a?"]
+        txt_path = workdir / "overlay.txt"
+        txt_path.write_text(overlay_text.replace("\\n", " "), encoding="utf-8")
+        filters.append(f"drawtext=textfile='{escape_filter_path(txt_path)}':font='Noto Sans Myanmar':fontcolor=white:fontsize=28:borderw=2:bordercolor=black:x=(w-text_w)/2:y=40")
+    video_filter = ",".join(filters) or "null"
+    has_logo = bool(logo_path and Path(logo_path).exists())
+    has_voice = bool(voice_path and Path(voice_path).exists())
+    cmd = ["ffmpeg", "-y", "-i", str(video_path)]
+    if has_logo:
+        cmd += ["-i", str(logo_path)]
+    if has_voice:
+        cmd += ["-i", str(voice_path)]
+    if has_logo:
+        graph = f"[0:v]{video_filter}[base];[1:v]scale=iw*0.18:-1[logo];[base][logo]overlay=W-w-24:24[vout]"
     else:
-        cmd = ["ffmpeg","-y","-i",str(video_path)]
-        if voice_path and Path(voice_path).exists():
-            cmd += ["-i",str(voice_path)]
-        cmd += ["-vf",vf]
-        if voice_path and Path(voice_path).exists():
-            cmd += ["-filter_complex",f"[0:a]volume={max(0,min(100,audio_mix))/100}[orig];[1:a]volume=1[voice];[orig][voice]amix=inputs=2:duration=first[aout]","-map","0:v","-map","[aout]"]
-        else:
-            cmd += ["-map","0:v","-map","0:a?"]
-    cmd += ["-c:v","libx264","-preset","veryfast","-crf","23","-c:a","aac","-b:a","160k","-shortest","-movflags","+faststart",str(output_path)]
+        graph = f"[0:v]{video_filter}[vout]"
+    if has_voice:
+        voice_index = 2 if has_logo else 1
+        graph += f";[0:a]volume={max(0,min(100,audio_mix))/100}[orig];[{voice_index}:a]volume=1[voice];[orig][voice]amix=inputs=2:duration=first[aout]"
+        cmd += ["-filter_complex", graph, "-map", "[vout]", "-map", "[aout]"]
+    else:
+        cmd += ["-filter_complex", graph, "-map", "[vout]", "-map", "0:a?"]
+    cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-shortest", "-movflags", "+faststart", str(output_path)]
     run_cmd(cmd, timeout=7200)
     return output_path
 
@@ -340,7 +337,7 @@ with tab4:
                         outdir.mkdir(parents=True, exist_ok=True)
                         logo_path = None
                         if logo_file:
-                            logo_path = outdir / "logo_image" + Path(logo_file.name).suffix
+                            logo_path = outdir / ("logo_image" + Path(logo_file.name).suffix)
                             logo_path.write_bytes(logo_file.getvalue())
                         output = outdir / (re.sub(r"[^A-Za-z0-9_-]","_",st.session_state.project_name) + "_final.mp4")
                         render_video(st.session_state.video_path, output, srt_for_video, st.session_state.voice_path or None, mirror, blur, subtitle_size, overlay_text, logo_path, audio_mix)
