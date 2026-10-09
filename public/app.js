@@ -1,5 +1,36 @@
 const $ = id => document.getElementById(id);
 const state = { file: null, activePage: 1, apiKey: '', voiceUrl: null, voiceId: null, selectedTool: 'subtitle', jobPoll: null, positions: {} };
+function saveProject() {
+  try {
+    localStorage.setItem('speedRecapProject', JSON.stringify({
+      file: state.file, transcript: $('transcript').value, script: $('script').value,
+      aspect: $('aspect').value, mirror: $('mirror').value, voiceId: state.voiceId,
+      voiceUrl: state.voiceUrl,
+      overlays: ['subtitleOverlay','textOverlay','logoOverlay','blurOverlay'].map(id => {
+        const e = $(id); return { id, text: e.textContent, left: e.style.left, top: e.style.top, width: e.style.width, height: e.style.height, fontSize: e.style.fontSize, hidden: e.classList.contains('hidden') };
+      })
+    }));
+  } catch {}
+}
+function restoreProject() {
+  try {
+    const p = JSON.parse(localStorage.getItem('speedRecapProject') || 'null');
+    if (!p) return;
+    $('transcript').value = p.transcript || ''; $('script').value = p.script || '';
+    if (p.aspect) { $('aspect').value = p.aspect; $('aspect').dispatchEvent(new Event('change')); }
+    if (p.mirror) { $('mirror').value = p.mirror; $('mirror').dispatchEvent(new Event('change')); }
+    if (p.file?.id) {
+      state.file = p.file; $('toScript').disabled = false;
+      $('fileMeta').classList.remove('hidden');
+      $('fileMeta').innerHTML = '<b>✓ Saved video</b><br>' + escapeHtml(p.file.name) + ' · ' + fmtBytes(p.file.size) + ' · ' + Math.round(p.file.duration || 0) + ' sec';
+      $('previewVideo').src = '/api/source/' + encodeURIComponent(p.file.id);
+      $('exportSummary').querySelector('b').textContent = p.file.name;
+    }
+    state.voiceId = p.voiceId || null; state.voiceUrl = p.voiceUrl || null;
+    if (state.voiceUrl) { $('voicePlayer').src=state.voiceUrl; $('voicePlayer').classList.remove('hidden'); $('voiceDownload').href=state.voiceUrl; $('voiceDownload').classList.remove('hidden'); }
+    for (const o of p.overlays || []) { const e=$(o.id); if(!e)continue; e.textContent=o.text||e.textContent; for(const k of ['left','top','width','height','fontSize']) if(o[k])e.style[k]=o[k]; e.classList.toggle('hidden',!!o.hidden); }
+  } catch {}
+}
 const pages = [...document.querySelectorAll('.page')];
 const stepButtons = [...document.querySelectorAll('.step')];
 const toast = (message, error = false) => { $('toast').textContent = message; $('toast').classList.toggle('error', error); $('toast').classList.remove('hidden'); clearTimeout(toast.timer); toast.timer = setTimeout(() => $('toast').classList.add('hidden'), 4500); };
@@ -22,20 +53,20 @@ function uploadVideo(file) {
   const xhr = new XMLHttpRequest(); xhr.open('POST', '/api/upload');
   if (state.apiKey) xhr.setRequestHeader('x-gemini-api-key', state.apiKey);
   xhr.upload.onprogress = e => { if (e.lengthComputable) { const p = Math.round(e.loaded/e.total*100); $('uploadPct').textContent = p+'%'; $('uploadProgress').style.width = p+'%'; } };
-  xhr.onload = () => { let data = {}; try { data = JSON.parse(xhr.responseText); } catch {} if(xhr.status<200||xhr.status>=300) { toast(data.error||'Upload failed',true); $('uploadLabel').textContent='Upload failed'; return; } state.file = data.file; $('uploadPct').textContent='100%'; $('uploadProgress').style.width='100%'; $('uploadLabel').textContent='Upload complete'; $('fileMeta').classList.remove('hidden'); $('fileMeta').innerHTML='<b>✓ Video ready</b><br>'+escapeHtml(state.file.name)+' · '+fmtBytes(state.file.size)+' · '+(state.file.width||'?')+'×'+(state.file.height||'?')+' · '+Math.round(state.file.duration)+' sec'; $('toScript').disabled=false; $('previewVideo').src=URL.createObjectURL(file); $('exportSummary').querySelector('b').textContent=state.file.name; toast('Video upload အောင်မြင်ပါပြီ။'); };
+  xhr.onload = () => { let data = {}; try { data = JSON.parse(xhr.responseText); } catch {} if(xhr.status<200||xhr.status>=300) { toast(data.error||'Upload failed',true); $('uploadLabel').textContent='Upload failed'; return; } state.file = data.file; saveProject(); $('uploadPct').textContent='100%'; $('uploadProgress').style.width='100%'; $('uploadLabel').textContent='Upload complete'; $('fileMeta').classList.remove('hidden'); $('fileMeta').innerHTML='<b>✓ Video ready</b><br>'+escapeHtml(state.file.name)+' · '+fmtBytes(state.file.size)+' · '+(state.file.width||'?')+'×'+(state.file.height||'?')+' · '+Math.round(state.file.duration)+' sec'; $('toScript').disabled=false; $('previewVideo').src=URL.createObjectURL(file); $('exportSummary').querySelector('b').textContent=state.file.name; toast('Video upload အောင်မြင်ပါပြီ။'); };
   xhr.onerror = () => { toast('Network error ဖြစ်နေပါတယ်။ ထပ်ကြိုးစားပါ။',true); $('uploadLabel').textContent='Upload failed'; }; xhr.send(form);
 }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 $('toScript').addEventListener('click', () => showPage(2));
 $('generateScript').addEventListener('click', async () => { const transcript=$('transcript').value.trim(); if(!state.apiKey) $('apiPanel').classList.remove('hidden'); if(!transcript) return toast('Transcript / story notes ထည့်ပါ။',true); const b=$('generateScript'); b.disabled=true; b.textContent='Generating…'; try { const d=await api('/api/recap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript,language:$('language').value})}); $('script').value=d.script; toast('Recap script ထုတ်ပြီးပါပြီ။'); } catch(e){toast(e.message,true);} finally {b.disabled=false;b.textContent='✦ Gemini နဲ့ Script ထုတ်မယ်';} });
 $('toVoice').addEventListener('click', () => { if(!$('script').value.trim()) { toast('Script ကို ထည့်ပါ။',true); return; } $('subtitleOverlay').textContent=$('script').value.trim().split(/[.!?\n]/)[0].slice(0,110)||'မြန်မာ recap စာတန်း'; $('overlayText').value=$('subtitleOverlay').textContent; showPage(3); });
-$('generateVoice').addEventListener('click', async () => { const text=$('script').value.trim(); if(!text) return toast('အရင် script ထည့်ပါ။',true); if(!state.apiKey) $('apiPanel').classList.remove('hidden'); const b=$('generateVoice'); b.disabled=true; b.textContent='Generating voice…'; try { const d=await api('/api/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})}); state.voiceUrl=d.audioUrl; state.voiceId=d.voiceId; $('voicePlayer').src=d.audioUrl; $('voicePlayer').classList.remove('hidden'); $('voiceDownload').href=d.audioUrl; $('voiceDownload').classList.remove('hidden'); toast('AI voice ထုတ်ပြီးပါပြီ။'); } catch(e){toast(e.message,true);} finally{b.disabled=false;b.textContent='♫ Generate Myanmar Voice';} });
-$('aspect').addEventListener('change', e => { $('preview').classList.remove('aspect-916','aspect-169','aspect-11'); $('preview').classList.add(e.target.value==='9:16'?'aspect-916':e.target.value==='16:9'?'aspect-169':'aspect-11'); });
+$('generateVoice').addEventListener('click', async () => { const text=$('script').value.trim(); if(!text) return toast('အရင် script ထည့်ပါ။',true); if(!state.apiKey) $('apiPanel').classList.remove('hidden'); const b=$('generateVoice'); b.disabled=true; b.textContent='Generating voice…'; try { const d=await api('/api/voice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})}); state.voiceUrl=d.audioUrl; state.voiceId=d.voiceId; saveProject(); $('voicePlayer').src=d.audioUrl; $('voicePlayer').classList.remove('hidden'); $('voiceDownload').href=d.audioUrl; $('voiceDownload').classList.remove('hidden'); toast('AI voice ထုတ်ပြီးပါပြီ။'); } catch(e){toast(e.message,true);} finally{b.disabled=false;b.textContent='♫ Generate Myanmar Voice';} });
+$('aspect').addEventListener('change', e => { saveProject(); $('preview').classList.remove('aspect-916','aspect-169','aspect-11'); $('preview').classList.add(e.target.value==='9:16'?'aspect-916':e.target.value==='16:9'?'aspect-169':'aspect-11'); });
 document.querySelectorAll('[data-tool]').forEach(b => b.addEventListener('click', () => { state.selectedTool=b.dataset.tool; document.querySelectorAll('[data-tool]').forEach(x=>x.classList.toggle('selected',x===b)); const map={subtitle:'subtitleOverlay',text:'textOverlay',logo:'logoOverlay',blur:'blurOverlay'}; const el=$(map[state.selectedTool]); el.classList.remove('hidden'); document.querySelectorAll('.overlay').forEach(x=>x.classList.toggle('selected',x===el)); if(state.selectedTool==='subtitle') $('overlayText').value=$('subtitleOverlay').textContent; if(state.selectedTool==='text') $('overlayText').value=$('textOverlay').textContent; if(state.selectedTool==='logo') $('overlayText').value=$('logoOverlay').textContent; }));
-$('overlayText').addEventListener('input', e => { const map={subtitle:'subtitleOverlay',text:'textOverlay',logo:'logoOverlay'}; if(map[state.selectedTool]) $(map[state.selectedTool]).textContent=e.target.value; });
-$('fontSize').addEventListener('input', e => { const el=$('subtitleOverlay'); el.style.fontSize=e.target.value+'px'; $('textOverlay').style.fontSize=e.target.value+'px'; });
+$('overlayText').addEventListener('input', e => { const map={subtitle:'subtitleOverlay',text:'textOverlay',logo:'logoOverlay'}; if(map[state.selectedTool]) $(map[state.selectedTool]).textContent=e.target.value; saveProject(); });
+$('fontSize').addEventListener('input', e => { const el=$('subtitleOverlay'); el.style.fontSize=e.target.value+'px'; $('textOverlay').style.fontSize=e.target.value+'px'; saveProject(); });
 $('blurAmount').addEventListener('change', e => $('blurOverlay').style.backdropFilter='blur('+Number(e.target.value)/2+'px)');
-$('mirror').addEventListener('change', e => $('previewVideo').style.transform=e.target.value==='yes'?'scaleX(-1)':'none');
+$('mirror').addEventListener('change', e => { $('previewVideo').style.transform=e.target.value==='yes'?'scaleX(-1)':'none'; saveProject(); });
 $('toExport').addEventListener('click', () => { if(!state.file) return toast('Video upload လုပ်ပါ။',true); showPage(4); });
 $('startExport').addEventListener('click', async () => {
   if(!state.file) return toast('Video upload လုပ်ပါ။',true);
@@ -58,6 +89,7 @@ let drag=null;
 document.querySelectorAll('.overlay').forEach(el=>{
   el.addEventListener('pointerdown', e=>{ if(e.target.classList.contains('resize-handle')){drag={el,resize:true,x:e.clientX,y:e.clientY,w:el.offsetWidth,h:el.offsetHeight};} else {drag={el,resize:false,x:e.clientX,y:e.clientY,left:el.offsetLeft,top:el.offsetTop};} el.classList.add('selected'); el.setPointerCapture(e.pointerId); e.preventDefault(); });
   el.addEventListener('pointermove',e=>{if(!drag||drag.el!==el)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(drag.resize){el.style.width=Math.max(44,drag.w+dx)+'px';el.style.height=Math.max(25,drag.h+dy)+'px';}else{const p=$('preview');const left=Math.max(0,Math.min(p.clientWidth-el.offsetWidth,drag.left+dx));const top=Math.max(0,Math.min(p.clientHeight-el.offsetHeight,drag.top+dy));el.style.left=left+'px';el.style.top=top+'px';}});
-  el.addEventListener('pointerup',()=>drag=null);el.addEventListener('pointercancel',()=>drag=null);
+  el.addEventListener('pointerup',()=>{drag=null;saveProject();});el.addEventListener('pointercancel',()=>{drag=null;saveProject();});
 });
+$('transcript').addEventListener('input', saveProject); $('script').addEventListener('input', saveProject); restoreProject();
 api('/api/health').then(d=>{if(!d.ok)throw new Error('health');}).catch(()=>toast('Server connection မရပါ။ Deploy ပြီးမပြီး စစ်ပါ။',true));
