@@ -1,365 +1,172 @@
-import base64
-import io
-import json
-import os
-import re
-import shutil
-import subprocess
-import tempfile
-import wave
+import base64, io, json, re, shutil, subprocess, tempfile, wave
 from pathlib import Path
-
 import requests
 import streamlit as st
-from PIL import Image
 
-st.set_page_config(page_title="Lynn Recap", page_icon="🎬", layout="wide")
-st.markdown("""
-<style>
-.block-container{max-width:1250px;padding-top:1.2rem}
-.stButton>button,.stDownloadButton>button{width:100%;border-radius:10px;min-height:2.6rem}
-[data-testid="stSidebar"]{background:#101a2c}
-</style>
-""", unsafe_allow_html=True)
-st.title("🎬 Lynn Recap")
-st.caption("Movie → မြန်မာ SRT → Gemini AI Voice → Edit → Final MP4")
+st.set_page_config(page_title="Speed Recap", page_icon="🎬", layout="wide")
+ROOT=Path("/var/data/speed-recap"); ROOT.mkdir(parents=True,exist_ok=True)
+DEFAULTS={"video":"","original_srt":"","ai_srt":"","script":"","voice":"","final":"","groq":"","gemini":"","project":"speed_recap","segments":[],"duration":0.0,"voice_name":"Kore","speed":1.0,"edit":{}}
+for k,v in DEFAULTS.items():
+    if k not in st.session_state: st.session_state[k]=v
+st.markdown("<style>.block-container{max-width:1250px;padding:.8rem .7rem 4rem}.stButton>button,.stDownloadButton>button{width:100%;min-height:2.5rem;border-radius:10px}[data-testid=stSidebar]{background:#101827}</style>",unsafe_allow_html=True)
 
-DEFAULTS = {
-    "video_path": "", "video_name": "", "original_srt": "", "burmese_srt": "",
-    "voice_path": "", "final_path": "", "thumb_path": "", "project_name": "lynn_recap",
-    "saved_groq_key": "", "saved_gemini_key": ""
-}
-for key, value in DEFAULTS.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
-
-def run_cmd(args, timeout=None):
-    result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
-    if result.returncode:
-        raise RuntimeError((result.stderr or result.stdout or "Command failed")[-3500:])
-    return result.stdout.strip()
-
-def ffmpeg_ready():
-    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
-        st.error("FFmpeg မတွေ့ပါ။ Render Dockerfile ထဲတွင် ffmpeg install လုပ်ထားကြောင်း စစ်ပါ။")
-        return False
-    return True
-
-def srt_time(seconds):
-    total = max(0, int(float(seconds) * 1000))
-    h, rem = divmod(total, 3600000)
-    m, rem = divmod(rem, 60000)
-    s, ms = divmod(rem, 1000)
-    return f"{h:02}:{m:02}:{s:02},{ms:03}"
-
-def clean_srt(text):
-    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    blocks = re.split(r"\n\s*\n", text)
-    out = []
-    for i, block in enumerate(blocks, 1):
-        lines = [x.strip().lstrip("\ufeff") for x in block.split("\n") if x.strip()]
-        if not lines:
-            continue
-        time_line = next((x for x in lines if "-->" in x), None)
-        if not time_line:
-            continue
-        idx = lines.index(time_line)
-        caption = [x for x in lines[idx+1:] if not x.isdigit()]
-        if caption:
-            out.append(f"{len(out)+1}\n{time_line}\n" + "\n".join(caption))
-    if not out:
-        raise ValueError("SRT format မမှန်ပါ။ 00:00:01,000 --> 00:00:03,000 ပုံစံဖြစ်ရပါမယ်။")
-    return "\n\n".join(out) + "\n"
-
-def call_gemini(api_key, parts, model="gemini-2.5-flash"):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    response = requests.post(url, params={"key": api_key}, json={"contents":[{"parts":parts}]}, timeout=180)
-    if not response.ok:
-        raise RuntimeError(f"Gemini API {response.status_code}: {response.text[:1200]}")
-    data = response.json()
-    try:
-        return "".join(p.get("text","") for p in data["candidates"][0]["content"]["parts"])
-    except (KeyError, IndexError, TypeError):
-        raise RuntimeError("Gemini က စာသားမပြန်လာပါ။ API key/model/quota ကိုစစ်ပါ။")
-
-def save_upload(uploaded, path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "wb") as f:
-        while True:
-            chunk = uploaded.read(1024 * 1024)
-            if not chunk:
-                break
-            f.write(chunk)
-    uploaded.seek(0)
-
-def transcribe_video(video_path, api_key, workdir):
-    audio_pattern = str(workdir / "audio_%03d.mp3")
-    run_cmd(["ffmpeg","-y","-i",str(video_path),"-vn","-ac","1","-ar","16000","-b:a","48k","-f","segment","-segment_time","480","-reset_timestamps","1",audio_pattern], timeout=3600)
-    parts = sorted(workdir.glob("audio_*.mp3"))
-    if not parts:
-        raise RuntimeError("ဗီဒီယိုထဲတွင် အသံမတွေ့ပါ။ အသံပါသော video ကိုတင်ပါ။")
-    all_segments = []
-    offset = 0.0
-    for part in parts:
-        with open(part, "rb") as f:
-            res = requests.post(
-                "https://api.groq.com/openai/v1/audio/transcriptions",
-                headers={"Authorization":"Bearer " + api_key},
-                data={"model":"whisper-large-v3-turbo","response_format":"verbose_json","temperature":"0"},
-                files={"file":(part.name,f,"audio/mpeg")},
-                timeout=900
-            )
-        if not res.ok:
-            raise RuntimeError(f"Groq API {res.status_code}: {res.text[:1200]}")
-        data = res.json()
-        for seg in data.get("segments", []):
-            start = float(seg.get("start",0)) + offset
-            end = float(seg.get("end",start)) + offset
-            caption = str(seg.get("text","")).strip()
-            if caption:
-                all_segments.append((start,end,caption))
-        duration = float(data.get("duration",0) or 0)
-        if duration <= 0:
-            probe = run_cmd(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(part)])
-            duration = float(probe or 0)
-        offset += duration
-    if not all_segments:
-        raise RuntimeError("အသံမှ စာသားမထုတ်နိုင်ပါ။ အခြား video သို့မဟုတ် API key ကိုစစ်ပါ။")
-    return "\n\n".join(f"{i}\n{srt_time(a)} --> {srt_time(b)}\n{t}" for i,(a,b,t) in enumerate(all_segments,1)) + "\n"
-
-def gemini_voice(text, api_key, output_path):
-    # Generate in chunks to avoid oversized TTS requests.
-    chunks = [text[i:i+1800] for i in range(0, len(text), 1800)] or [text]
-    pcm_all = bytearray()
-    for chunk in chunks:
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent"
-        payload = {
-            "contents":[{"parts":[{"text":"Read naturally in a clear, warm Myanmar Burmese narrator voice. Speak only the following text, without adding anything:\n" + chunk}]}],
-            "generationConfig":{"responseModalities":["AUDIO"],"speechConfig":{"voiceConfig":{"prebuiltVoiceConfig":{"voiceName":"Kore"}}}}
-        }
-        res = requests.post(url, params={"key":api_key}, json=payload, timeout=240)
-        if not res.ok:
-            raise RuntimeError(f"Gemini TTS API {res.status_code}: {res.text[:1200]}")
-        data = res.json()
-        try:
-            inline = next(p["inlineData"] for p in data["candidates"][0]["content"]["parts"] if "inlineData" in p)
-            raw = base64.b64decode(inline["data"])
-            mime = inline.get("mimeType","audio/L16;rate=24000")
-            rate_match = re.search(r"rate=(\d+)", mime)
-            sample_rate = int(rate_match.group(1)) if rate_match else 24000
-            # Gemini returns raw signed 16-bit PCM for audio/L16.
-            if "wav" in mime.lower():
-                with wave.open(io.BytesIO(raw), "rb") as wf:
-                    pcm_all.extend(wf.readframes(wf.getnframes()))
-                    sample_rate = wf.getframerate()
-            else:
-                pcm_all.extend(raw)
-        except (KeyError, StopIteration, IndexError, TypeError) as exc:
-            raise RuntimeError("Gemini TTS အသံ data မရပါ။ Model ရရှိမှုနှင့် API quota ကိုစစ်ပါ။") from exc
-    if not pcm_all:
-        raise RuntimeError("AI voice အလွတ်ဖြစ်နေပါသည်။")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(output_path), "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(bytes(pcm_all))
-    return output_path
-
-def escape_filter_path(path):
-    return str(path).replace("\\","/").replace(":","\\:").replace("'","\\'").replace("[","\\[").replace("]","\\]")
-
-def render_video(video_path, output_path, srt_text, voice_path=None, mirror=False, blur=0, subtitle_size=24, overlay_text="", logo_path=None, audio_mix=25):
-    workdir = output_path.parent
-    srt_path = workdir / "captions.srt"
-    srt_path.write_text(clean_srt(srt_text), encoding="utf-8")
-    filters = []
-    if mirror:
-        filters.append("hflip")
-    if blur > 0:
-        filters.append(f"boxblur={int(blur)}:1")
-    filters.append(f"subtitles='{escape_filter_path(srt_path)}':force_style='FontName=Noto Sans Myanmar,FontSize={int(subtitle_size)},Outline=2,Shadow=1,Alignment=2,MarginV=35'")
-    if overlay_text.strip():
-        txt_path = workdir / "overlay.txt"
-        txt_path.write_text(overlay_text.replace("\\n", " "), encoding="utf-8")
-        filters.append(f"drawtext=textfile='{escape_filter_path(txt_path)}':font='Noto Sans Myanmar':fontcolor=white:fontsize=28:borderw=2:bordercolor=black:x=(w-text_w)/2:y=40")
-    video_filter = ",".join(filters) or "null"
-    has_logo = bool(logo_path and Path(logo_path).exists())
-    has_voice = bool(voice_path and Path(voice_path).exists())
-    cmd = ["ffmpeg", "-y", "-i", str(video_path)]
-    if has_logo:
-        cmd += ["-i", str(logo_path)]
+def cmd(args,timeout=7200):
+    p=subprocess.run(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=timeout)
+    if p.returncode: raise RuntimeError((p.stderr or p.stdout or "Command failed")[-5000:])
+    return p.stdout.strip()
+def tsec(x):
+    ms=max(0,int(round(float(x)*1000))); h,r=divmod(ms,3600000); m,r=divmod(r,60000); s,ms=divmod(r,1000); return f"{h:02}:{m:02}:{s:02},{ms:03}"
+def parse_time(v):
+    h,m,z=v.replace('.',',').split(':'); q,ms=(z.split(',')+["0"])[:2]; return int(h)*3600+int(m)*60+int(q)+int(ms.ljust(3,'0')[:3])/1000
+def parse_srt(s):
+    out=[]
+    for b in re.split(r'\n\s*\n',s.replace('\r','').strip()):
+        lines=[x.strip() for x in b.split('\n') if x.strip()]; tl=next((x for x in lines if '-->' in x),None)
+        if not tl: continue
+        a,z=[x.strip() for x in tl.split('-->',1)]; text=' '.join(x for x in lines[lines.index(tl)+1:] if not x.isdigit())
+        if text: out.append([parse_time(a),parse_time(z),text])
+    return out
+def make_srt(segs): return '\n\n'.join(f"{i}\n{tsec(a)} --> {tsec(b)}\n{text}" for i,(a,b,text) in enumerate(segs,1))+'\n'
+def gemini(key,prompt,model="gemini-2.5-flash"):
+    r=requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",params={'key':key},json={'contents':[{'parts':[{'text':prompt}]}]},timeout=240)
+    if not r.ok: raise RuntimeError(f"Gemini {r.status_code}: {r.text[:1500]}")
+    try:return ''.join(p.get('text','') for p in r.json()['candidates'][0]['content']['parts'])
+    except Exception: raise RuntimeError('Gemini က စာသားမပြန်ပါ။ API key/model/quota စစ်ပါ။')
+def download_url(url,out):
+    if not shutil.which('yt-dlp'): raise RuntimeError('yt-dlp မတွေ့ပါ။ Render dependency ကို update လုပ်ပါ။')
+    cmd(['yt-dlp','--no-playlist','-f','bv*+ba/b','--merge-output-format','mp4','-o',str(out),url],3600)
+def transcribe(video,key,work):
+    audio=work/'audio.mp3'; cmd(['ffmpeg','-y','-i',str(video),'-vn','-ac','1','-ar','16000','-b:a','48k',str(audio)],3600)
+    with open(audio,'rb') as f: r=requests.post('https://api.groq.com/openai/v1/audio/transcriptions',headers={'Authorization':'Bearer '+key},data={'model':'whisper-large-v3-turbo','response_format':'verbose_json','temperature':'0'},files={'file':(audio.name,f,'audio/mpeg')},timeout=1800)
+    if not r.ok: raise RuntimeError(f"Groq {r.status_code}: {r.text[:1500]}")
+    d=r.json(); seg=[]
+    for x in d.get('segments',[]):
+        text=str(x.get('text','')).strip(); a=float(x.get('start',0)); b=float(x.get('end',a))
+        if text: seg.append([a,b,text])
+    if not seg: raise RuntimeError('အသံမှ စာသားမထုတ်နိုင်ပါ။')
+    return seg,float(d.get('duration',0) or 0)
+def translate_segments(key,segs):
+    payload=json.dumps([{'i':i,'start':a,'end':b,'text':t} for i,(a,b,t) in enumerate(segs,1)],ensure_ascii=False)
+    prompt="Translate every movie transcript item into natural spoken Myanmar Burmese for a movie recap narrator. Keep EXACTLY the same i/start/end values. Do not omit, merge, reorder, or add items. Return ONLY valid JSON array with keys i,start,end,text. Keep each Burmese text concise enough to fit its original time. No markdown.\n"+payload
+    raw=re.sub(r'^```(?:json)?\s*|\s*```$','',gemini(key,prompt).strip()); data=json.loads(raw); by={int(x['i']):x for x in data}; return [[a,b,str(by.get(i,{}).get('text',t)).strip()] for i,(a,b,t) in enumerate(segs,1)]
+def tts_one(key,text,voice,out,speed):
+    prompt=f"Speak only this Myanmar Burmese narration naturally and clearly. Do not add words. Target speed {speed:.2f}x:\n{text}"
+    p={'contents':[{'parts':[{'text':prompt}]}],'generationConfig':{'responseModalities':['AUDIO'],'speechConfig':{'voiceConfig':{'prebuiltVoiceConfig':{'voiceName':voice}}}}}
+    r=requests.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent',params={'key':key},json=p,timeout=300)
+    if not r.ok: raise RuntimeError(f"Gemini TTS {r.status_code}: {r.text[:1500]}")
+    d=r.json(); part=next((p for p in d['candidates'][0]['content']['parts'] if 'inlineData' in p),None)
+    if not part: raise RuntimeError('TTS audio data မရပါ။')
+    raw=base64.b64decode(part['inlineData']['data']); mime=part['inlineData'].get('mimeType','audio/L16;rate=24000'); m=re.search(r'rate=(\d+)',mime); rate=int(m.group(1)) if m else 24000
+    if 'wav' in mime.lower():
+        with wave.open(io.BytesIO(raw),'rb') as w: pcm=w.readframes(w.getnframes()); rate=w.getframerate()
+    else: pcm=raw
+    with wave.open(str(out),'wb') as w: w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(pcm)
+def build_timed_voice(key,segs,voice,speed,work):
+    pieces=[]
+    for i,(a,b,text) in enumerate(segs):
+        p=work/f'v_{i:04}.wav'; tts_one(key,text,voice,p,speed); pieces.append((a,p))
+    inputs=[]; filters=[]; labels=[]
+    for i,(a,p) in enumerate(pieces):
+        inputs+=['-i',str(p)]; d=max(0,int(a*1000)); filters.append(f'[{i}:a]adelay={d}|{d}[v{i}]'); labels.append(f'[v{i}]')
+    filters.append(''.join(labels)+f'amix=inputs={len(labels)}:duration=longest:dropout_transition=0[aout]')
+    final=work/'ai_voice_timed.wav'; cmd(['ffmpeg','-y']+inputs+['-filter_complex',';'.join(filters),'-map','[aout]','-c:a','pcm_s16le',str(final)],3600); return final
+def esc(p): return str(p).replace('\\','/').replace(':','\\:').replace("'","\\'").replace('[','\\[').replace(']','\\]')
+def render(video,out,segs,voice=None,edit=None,music=None):
+    edit=edit or {}; work=out.parent; sp=work/'ai_voice.srt'; sp.write_text(make_srt(segs),encoding='utf-8')
+    x=edit.get('bx',5)/100; y=edit.get('by',5)/100; w=edit.get('bw',90)/100; h=edit.get('bh',90)/100
+    base='[0:v]'
+    if edit.get('mirror'): base+='hflip,'
+    if edit.get('autocolor'): base+='eq=contrast=1.04:brightness=0.02:saturation=1.10,'
+    if edit.get('blur_on'): graph=base+f"split=2[base][bl];[bl]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},boxblur=12:2[bb];[base][bb]overlay=iw*{x}:ih*{y}[vb];[vb]subtitles='{esc(sp)}':force_style='FontName=AKA03,FontSize={int(edit.get('subsize',26))},Outline=2,Shadow=1,Alignment=2,MarginV={int(edit.get('submargin',35))}'[vout]"
+    else: graph=base+f"subtitles='{esc(sp)}':force_style='FontName=AKA03,FontSize={int(edit.get('subsize',26))},Outline=2,Shadow=1,Alignment=2,MarginV={int(edit.get('submargin',35))}'[vout]"
+    logo=edit.get('logo'); has_logo=bool(logo and Path(logo).exists()); has_voice=bool(voice and Path(voice).exists()); has_music=bool(music and Path(music).exists())
+    args=['ffmpeg','-y','-i',str(video)]; idx=1
+    if has_logo: args+=['-i',str(logo)]; li=idx; idx+=1
+    if has_voice: args+=['-i',str(voice)]; vi=idx; idx+=1
+    if has_music: args+=['-i',str(music)]; mi=idx; idx+=1
+    vmap='[vout]'
+    if has_logo: graph+=f";[{li}:v]scale=iw*0.18:-1[lg];[vout][lg]overlay=W-w-24:24[vfinal]"; vmap='[vfinal]'
+    aud=[]; amap='0:a?'
     if has_voice:
-        cmd += ["-i", str(voice_path)]
-    if has_logo:
-        graph = f"[0:v]{video_filter}[base];[1:v]scale=iw*0.18:-1[logo];[base][logo]overlay=W-w-24:24[vout]"
-    else:
-        graph = f"[0:v]{video_filter}[vout]"
-    if has_voice:
-        voice_index = 2 if has_logo else 1
-        graph += f";[0:a]volume={max(0,min(100,audio_mix))/100}[orig];[{voice_index}:a]volume=1[voice];[orig][voice]amix=inputs=2:duration=first[aout]"
-        cmd += ["-filter_complex", graph, "-map", "[vout]", "-map", "[aout]"]
-    else:
-        cmd += ["-filter_complex", graph, "-map", "[vout]", "-map", "0:a?"]
-    cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-shortest", "-movflags", "+faststart", str(output_path)]
-    run_cmd(cmd, timeout=7200)
-    return output_path
+        aud=[f'[0:a]volume={max(0,min(100,int(edit.get("origvol",20))))/100}[oa]',f'[{vi}:a]volume=1[va]']; labels=['[oa]','[va]']
+        if has_music: aud.append(f'[{mi}:a]volume={max(0,min(100,int(edit.get("musicvol",12))))/100}[ma]'); labels.append('[ma]')
+        aud.append(''.join(labels)+f'amix=inputs={len(labels)}:duration=longest:dropout_transition=0[aout]'); amap='[aout]'
+    elif has_music:
+        aud=[f'[0:a]volume=0.35[oa]',f'[{mi}:a]volume={max(0,min(100,int(edit.get("musicvol",12))))/100}[ma]','[oa][ma]amix=inputs=2:duration=first[aout]']; amap='[aout]'
+    args+=['-filter_complex',';'.join([graph]+aud),'-map',vmap,'-map',amap,'-c:v','libx264','-preset','veryfast','-crf','23','-c:a','aac','-b:a','160k','-shortest','-movflags','+faststart',str(out)]; cmd(args,7200); return out
 
 with st.sidebar:
-    st.subheader("🔑 API Keys")
-    with st.form("api_keys_form"):
-        groq_in = st.text_input("Groq API Key (SRT)", value=st.session_state.saved_groq_key, type="password")
-        gemini_in = st.text_input("Gemini API Key (ဘာသာပြန်/Voice)", value=st.session_state.saved_gemini_key, type="password")
-        if st.form_submit_button("API Keys သိမ်းမယ်"):
-            st.session_state.saved_groq_key = groq_in.strip()
-            st.session_state.saved_gemini_key = gemini_in.strip()
-            st.success("လက်ရှိ session အတွက် သိမ်းပြီးပါပြီ။")
-    st.markdown("[Groq key ယူရန်](https://console.groq.com/keys)  ·  [Gemini key ယူရန်](https://aistudio.google.com/apikey)")
-    st.divider()
-    st.session_state.project_name = st.text_input("Output ဖိုင်နာမည်", value=st.session_state.project_name).strip() or "lynn_recap"
-    if st.button("🧹 New Project / အစမှပြန်စမယ်"):
-        for k,v in DEFAULTS.items():
-            st.session_state[k] = v
+    st.header('⚙️ Settings'); st.session_state.groq=st.text_input('Groq API Key',value=st.session_state.groq,type='password'); st.session_state.gemini=st.text_input('Gemini API Key',value=st.session_state.gemini,type='password')
+    st.markdown('[Groq Key](https://console.groq.com/keys) · [Gemini Key](https://aistudio.google.com/apikey)'); st.session_state.project=st.text_input('Project name',value=st.session_state.project)
+    if st.button('🧹 New Project'):
+        for k,v in DEFAULTS.items(): st.session_state[k]=v
         st.rerun()
-
-tab1, tab2, tab3, tab4 = st.tabs(["1. Upload Video","2. Transcript & Translate","3. AI Voice","4. Final Video & Thumbnail"])
-
-with tab1:
-    st.header("ဗီဒီယိုတင်ရန်")
-    uploaded = st.file_uploader("Movie/video file (MP4, MOV, MKV)", type=["mp4","mov","mkv","webm","avi"])
-    if uploaded:
-        if uploaded.size > 900 * 1024 * 1024:
-            st.error("ဖိုင် 900 MB ထက်ကြီးနေပါတယ်။ ပိုသေးတဲ့ဖိုင်ကိုသုံးပါ။")
-        elif st.button("⬆️ Upload သိမ်းမယ်", key="save_upload"):
-            if not ffmpeg_ready():
-                st.stop()
-            base = Path(tempfile.gettempdir()) / "lynn_recap_session"
-            base.mkdir(parents=True, exist_ok=True)
-            dest = base / re.sub(r"[^A-Za-z0-9._-]", "_", uploaded.name)
-            try:
-                save_upload(uploaded, dest)
-                st.session_state.video_path = str(dest)
-                st.session_state.video_name = uploaded.name
-                st.session_state.final_path = ""
-                st.session_state.thumb_path = ""
-                st.success("Video သိမ်းပြီးပါပြီ။ နောက်တစ်ဆင့်သို့ သွားပါ။")
-            except Exception as e:
-                st.error(f"Upload မအောင်မြင်ပါ: {e}")
-    if st.session_state.video_path and Path(st.session_state.video_path).exists():
-        st.success("လက်ရှိ Video: " + st.session_state.video_name)
-        st.video(st.session_state.video_path)
-
-with tab2:
-    st.header("SRT ထုတ်ပြီး မြန်မာဘာသာပြန်ရန်")
-    st.info("SRT ထုတ်ရန် Groq key၊ ဘာသာပြန်ရန် Gemini key လိုအပ်ပါသည်။")
-    if st.button("⚡ 1. Auto SRT ထုတ်မယ်", key="transcribe"):
-        if not st.session_state.video_path or not Path(st.session_state.video_path).exists():
-            st.error("ပထမဆုံး Upload Video အဆင့်တွင် ဗီဒီယိုတင်ပါ။")
-        elif not st.session_state.saved_groq_key:
-            st.error("Sidebar တွင် Groq API key ထည့်ပြီး သိမ်းပါ။")
-        elif not ffmpeg_ready():
-            st.stop()
+st.title('🎬 Speed Recap'); st.caption('Video/URL → Groq Transcript → Gemini Burmese Script → AI Voice SRT → Live Edit → Final MP4')
+t1,t2,t3,t4=st.tabs(['1️⃣ Source & SRT','2️⃣ AI Voice','3️⃣ Live Edit','4️⃣ Final Video'])
+with t1:
+    st.subheader('Step 1 — Video / URL'); mode=st.radio('Source',['Upload Video','Video URL'],horizontal=True); video_file=None; url=''
+    if mode=='Upload Video': video_file=st.file_uploader('MP4 / MOV / MKV / WEBM',type=['mp4','mov','mkv','webm','avi'])
+    else: url=st.text_input('Video URL')
+    if st.button('🚀 Step 1 စတင်မယ်',type='primary'):
+        if not st.session_state.groq: st.error('Groq API Key ထည့်ပါ။')
+        elif not video_file and not url.strip(): st.error('Video upload သို့မဟုတ် URL ထည့်ပါ။')
         else:
             try:
-                with st.spinner("အသံခွဲပြီး SRT ထုတ်နေပါတယ်။ Video ကြာလျှင် အချိန်ယူနိုင်ပါတယ်..."):
-                    wd = Path(tempfile.gettempdir()) / "lynn_recap_session"
-                    st.session_state.original_srt = transcribe_video(Path(st.session_state.video_path), st.session_state.saved_groq_key, wd)
-                st.success("SRT ထုတ်ပြီးပါပြီ။")
-            except Exception as e:
-                st.error(f"SRT error: {e}")
-    st.session_state.original_srt = st.text_area("Original SRT (လိုပါက ပြင်နိုင်သည်)", value=st.session_state.original_srt, height=220, key="original_editor")
-    if st.button("🌐 2. မြန်မာဘာသာပြန်မယ်", key="translate"):
-        if not st.session_state.saved_gemini_key:
-            st.error("Sidebar တွင် Gemini API key ထည့်ပြီး သိမ်းပါ။")
-        elif not st.session_state.original_srt.strip():
-            st.error("Original SRT မရှိသေးပါ။")
-        else:
+                work=Path(tempfile.mkdtemp(prefix='speed_',dir=ROOT)); video=work/'source.mp4'
+                if video_file:
+                    with open(video,'wb') as f:
+                        while True:
+                            b=video_file.read(1024*1024)
+                            if not b: break
+                            f.write(b)
+                else: download_url(url.strip(),video)
+                seg,dur=transcribe(video,st.session_state.groq,work); st.session_state.video=str(video); st.session_state.segments=seg; st.session_state.duration=dur; st.session_state.original_srt=make_srt(seg); st.success(f'Groq transcript ပြီးပါပြီ — {len(seg)} segments')
+            except Exception as e: st.error(str(e))
+    if st.session_state.original_srt:
+        st.download_button('⬇️ Original SRT',st.session_state.original_srt,f'{st.session_state.project}_original.srt','text/plain')
+        if st.session_state.gemini and st.button('🇲🇲 Burmese Script + AI Voice SRT ထုတ်မယ်'):
             try:
-                with st.spinner("မြန်မာဘာသာပြန်နေပါတယ်..."):
-                    src = clean_srt(st.session_state.original_srt)
-                    translated = call_gemini(st.session_state.saved_gemini_key, [{"text":"Translate the subtitle text in this SRT into natural conversational Myanmar Burmese. Keep every subtitle index and timestamp exactly unchanged. Return ONLY valid SRT, no markdown fences.\n\n"+src}])
-                    st.session_state.burmese_srt = clean_srt(translated)
-                st.success("မြန်မာဘာသာပြန်ပြီးပါပြီ။")
-            except Exception as e:
-                st.error(f"ဘာသာပြန် error: {e}")
-    st.session_state.burmese_srt = st.text_area("မြန်မာ SRT (အသံထွက်စာသားအပါအဝင် ပြင်နိုင်သည်)", value=st.session_state.burmese_srt, height=260, key="burmese_editor")
-    st.download_button("⬇️ မြန်မာ SRT Download", data=st.session_state.burmese_srt or "", file_name="myanmar_subtitles.srt", mime="application/x-subrip", disabled=not bool(st.session_state.burmese_srt.strip()))
-
-with tab3:
-    st.header("Gemini AI Voice")
-    st.caption("မြန်မာ narration စာသားကို SRT ထဲကနေ ယူပြီး အသံဖန်တီးပါမယ်။")
-    voice_text = st.text_area("AI Voice ပြောမည့်စာသား", value="\n".join([x for x in re.sub(r"(?m)^\d+\s*$|^.*-->.*$","",st.session_state.burmese_srt).splitlines() if x.strip()]), height=220, key="voice_text")
-    if st.button("🎙️ Gemini AI Voice ထုတ်မယ်", key="make_voice"):
-        if not st.session_state.saved_gemini_key:
-            st.error("Sidebar တွင် Gemini API key ထည့်ပြီး သိမ်းပါ။")
-        elif not voice_text.strip():
-            st.error("အသံဖန်တီးရန် စာသားထည့်ပါ။")
-        else:
-            try:
-                with st.spinner("Gemini AI voice ဖန်တီးနေပါတယ်..."):
-                    voice_out = Path(tempfile.gettempdir()) / "lynn_recap_session" / "voice.wav"
-                    gemini_voice(voice_text.strip(), st.session_state.saved_gemini_key, voice_out)
-                    st.session_state.voice_path = str(voice_out)
-                st.success("AI voice ထုတ်ပြီးပါပြီ။")
-            except Exception as e:
-                st.error(f"AI Voice error: {e}")
-    if st.session_state.voice_path and Path(st.session_state.voice_path).exists():
-        st.audio(st.session_state.voice_path)
-        st.download_button("⬇️ Voice WAV Download", data=Path(st.session_state.voice_path).read_bytes(), file_name="myanmar_voice.wav", mime="audio/wav")
-
-with tab4:
-    st.header("Live Edit Preview & Final Export")
-    if not st.session_state.video_path or not Path(st.session_state.video_path).exists():
-        st.warning("အရင်ဆုံး Upload Video အဆင့်တွင် video တင်ပါ။")
+                b=translate_segments(st.session_state.gemini,st.session_state.segments); st.session_state.segments=b; st.session_state.ai_srt=make_srt(b); st.session_state.script='\n'.join(x[2] for x in b); st.success('Burmese timeline SRT ပြီးပါပြီ။')
+            except Exception as e: st.error(str(e))
+        if st.session_state.ai_srt: st.download_button('⬇️ AI Voice SRT',st.session_state.ai_srt,f'{st.session_state.project}_ai_voice.srt','text/plain')
+with t2:
+    st.subheader('Step 2 — AI Voice')
+    if not st.session_state.ai_srt: st.info('Step 1 မှာ Burmese Script ကို အရင်ထုတ်ပါ။')
     else:
-        left, right = st.columns([1,1])
-        with left:
-            st.subheader("Preview")
-            st.video(st.session_state.video_path)
-        with right:
-            st.subheader("Edit Settings")
-            mirror = st.checkbox("Mirror / ဘယ်ညာပြောင်း", value=False)
-            blur = st.slider("Blur strength (0 = မမှုန်)", 0, 10, 0)
-            subtitle_size = st.slider("Subtitle size", 14, 42, 24)
-            overlay_text = st.text_input("Logo မဟုတ်သော စာသား", value="")
-            logo_file = st.file_uploader("Logo ပုံ (PNG/JPG)", type=["png","jpg","jpeg"], key="logo_upload")
-            audio_mix = st.slider("Original audio volume (%)", 0, 100, 25)
-            srt_for_video = st.text_area("Final video subtitle SRT", value=st.session_state.burmese_srt, height=180, key="final_srt")
-        if st.button("🎬 Final MP4 ထုတ်မယ်", key="export"):
-            if not srt_for_video.strip():
-                st.error("Final video အတွက် SRT ထည့်ပါ။")
-            elif not ffmpeg_ready():
-                st.stop()
+        voices=['Kore','Puck','Charon','Fenrir']; voice=st.selectbox('Burmese Voice',voices,index=voices.index(st.session_state.voice_name) if st.session_state.voice_name in voices else 0); speed=st.select_slider('Speed',options=[0.75,0.85,0.95,1.0,1.10,1.20,1.30],value=st.session_state.speed)
+        st.caption('15–24 = slow · 25–30 = normal · 30–35 = long. AI voice ကို original video timeline အတိုင်း စီထားပါတယ်။')
+        if st.button('🎙️ AI Voice Generate',type='primary'):
+            if not st.session_state.gemini: st.error('Gemini API Key ထည့်ပါ။')
             else:
                 try:
-                    with st.spinner("Video render လုပ်နေပါတယ်။ ဖိုင်ကြီးလျှင် အချိန်ယူနိုင်ပါတယ်..."):
-                        outdir = Path(tempfile.gettempdir()) / "lynn_recap_session"
-                        outdir.mkdir(parents=True, exist_ok=True)
-                        logo_path = None
-                        if logo_file:
-                            logo_path = outdir / ("logo_image" + Path(logo_file.name).suffix)
-                            logo_path.write_bytes(logo_file.getvalue())
-                        output = outdir / (re.sub(r"[^A-Za-z0-9_-]","_",st.session_state.project_name) + "_final.mp4")
-                        render_video(st.session_state.video_path, output, srt_for_video, st.session_state.voice_path or None, mirror, blur, subtitle_size, overlay_text, logo_path, audio_mix)
-                        st.session_state.final_path = str(output)
-                    st.success("Final video ပြီးပါပြီ။")
-                except Exception as e:
-                    st.error(f"Video export error: {e}")
-        if st.session_state.final_path and Path(st.session_state.final_path).exists():
-            st.video(st.session_state.final_path)
-            st.download_button("⬇️ Final MP4 Download", data=Path(st.session_state.final_path).read_bytes(), file_name=Path(st.session_state.final_path).name, mime="video/mp4")
-        if st.button("🖼️ Thumbnail ဖန်တီးမယ်", key="make_thumbnail"):
+                    work=Path(st.session_state.video).parent; st.session_state.voice=str(build_timed_voice(st.session_state.gemini,st.session_state.segments,voice,float(speed),work)); st.session_state.voice_name=voice; st.session_state.speed=float(speed); st.success('AI Voice timeline sync ပြီးပါပြီ။')
+                except Exception as e: st.error(str(e))
+        if st.session_state.voice and Path(st.session_state.voice).exists(): st.audio(st.session_state.voice); st.download_button('⬇️ AI Voice',open(st.session_state.voice,'rb').read(),f'{st.session_state.project}_voice.wav','audio/wav')
+with t3:
+    st.subheader('Step 3 — Live Edit')
+    if not st.session_state.video: st.info('Step 1 ကို အရင်လုပ်ပါ။')
+    else:
+        st.video(st.session_state.video); e=st.session_state.edit
+        e['blur_on']=st.toggle('Blur ON/OFF',value=e.get('blur_on',True)); e['mirror']=st.toggle('Mirror ON/OFF',value=e.get('mirror',False)); e['autocolor']=st.toggle('Auto Colour ON/OFF',value=e.get('autocolor',True))
+        c1,c2=st.columns(2)
+        with c1: e['bx']=st.slider('Blur X %',0,90,int(e.get('bx',5))); e['by']=st.slider('Blur Y %',0,90,int(e.get('by',5))); e['bw']=st.slider('Blur Width %',5,100,int(e.get('bw',90))); e['bh']=st.slider('Blur Height %',5,100,int(e.get('bh',90)))
+        with c2: e['subsize']=st.slider('Subtitle size',12,60,int(e.get('subsize',26))); e['submargin']=st.slider('Subtitle position',0,180,int(e.get('submargin',35))); e['origvol']=st.slider('Original audio %',0,100,int(e.get('origvol',20)))
+        logo=st.file_uploader('Logo (optional)',type=['png','jpg','jpeg'],key='logo_upload'); music=st.file_uploader('Background Music (optional)',type=['mp3','wav','m4a'],key='music_upload')
+        if logo: lp=Path(st.session_state.video).parent/'logo.png'; lp.write_bytes(logo.getbuffer()); e['logo']=str(lp)
+        if music: mp=Path(st.session_state.video).parent/'music.mp3'; mp.write_bytes(music.getbuffer()); e['music']=str(mp)
+        e['musicvol']=st.slider('Music volume %',0,50,int(e.get('musicvol',12))); st.session_state.edit=e
+        if st.button('👀 Preview Edit'):
             try:
-                thumbdir = Path(tempfile.gettempdir()) / "lynn_recap_session"
-                thumbdir.mkdir(parents=True, exist_ok=True)
-                thumb = thumbdir / "thumbnail.jpg"
-                run_cmd(["ffmpeg","-y","-ss","00:00:03","-i",st.session_state.video_path,"-frames:v","1","-q:v","2",str(thumb)], timeout=120)
-                st.session_state.thumb_path = str(thumb)
-            except Exception as e:
-                st.error(f"Thumbnail error: {e}")
-        if st.session_state.thumb_path and Path(st.session_state.thumb_path).exists():
-            st.image(st.session_state.thumb_path, caption="Thumbnail Preview", use_container_width=True)
-            st.download_button("⬇️ Thumbnail Download", data=Path(st.session_state.thumb_path).read_bytes(), file_name="thumbnail.jpg", mime="image/jpeg")
-
-st.divider()
-st.caption("Lynn Recap • Streamlit Edition • API keys are stored only in the active session. Render/Streamlit free instances may restart or run out of memory with large videos.")
+                p=Path(st.session_state.video).parent/'preview.mp4'; render(st.session_state.video,p,st.session_state.segments,st.session_state.voice,e,e.get('music')); st.video(str(p))
+            except Exception as ex: st.error(str(ex))
+with t4:
+    st.subheader('Step 4 — Final Video')
+    if not st.session_state.video or not st.session_state.ai_srt: st.info('Step 1 + Step 2 ကို အရင်ပြီးအောင်လုပ်ပါ။')
+    else:
+        st.write('AI Voice + Video + AI Voice SRT + Live Edit ကို timeline တစ်ခုထဲမှာပေါင်းမယ်။')
+        if st.button('🎬 FINAL MP4 ထုတ်မယ်',type='primary'):
+            try:
+                p=Path(st.session_state.video).parent/f'{st.session_state.project}_final.mp4'; render(st.session_state.video,p,st.session_state.segments,st.session_state.voice,st.session_state.edit,st.session_state.edit.get('music')); st.session_state.final=str(p); st.success('Final Video အောင်မြင်ပါပြီ။')
+            except Exception as e: st.error(str(e))
+        if st.session_state.final and Path(st.session_state.final).exists(): st.video(st.session_state.final); st.download_button('⬇️ Download Final MP4',open(st.session_state.final,'rb').read(),f'{st.session_state.project}_final.mp4','video/mp4')
+st.divider(); st.caption('API keys ကို source code ထဲမသိမ်းပါ။ ကိုယ်ပိုင်/ခွင့်ပြုချက်ရှိသော video များကိုသာ အသုံးပြုပါ။')
