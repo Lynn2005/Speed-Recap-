@@ -2,3 +2,4 @@ streamlit>=1.40,<2
 requests>=2.32,<3
 streamlit-drawable-canvas>=0.9,<1
 Pillow>=10,<13
+yt-dlp>=2025.1
